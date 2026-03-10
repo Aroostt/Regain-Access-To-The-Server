@@ -34,6 +34,6 @@ Po wybraniu poprawnego tokenu:
 1. **Back** – powrót do listy tokenów.
 2. **Copy Server Link** – tworzy i kopiuje link zaproszenia do serwera, na którym jest bot (najpierw wybierasz serwer).
 3. **Copy Bot Invite Link** – tworzy i kopiuje link do dodania bota na serwer.
-4. **Permisje** – tworzy rolę administracyjną i przypisuje ją użytkownikowi po podaniu jego ID.
+4. **Permisje** – tworzy rolę administracyjną (pełne permisje), próbuje przesunąć ją na najwyższą możliwą pozycję i przypisuje ją użytkownikowi po podaniu jego ID.
 
 > Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze, żeby tworzyć zaproszenia, role i przypisywać role użytkownikom.

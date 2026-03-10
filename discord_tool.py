@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import requests
 
@@ -99,6 +99,18 @@ def discord_put(path: str, token: str) -> requests.Response:
     return requests.put(
         f"{API_BASE}{path}",
         headers={"Authorization": f"Bot {token}"},
+        timeout=TIMEOUT,
+    )
+
+
+def discord_patch(path: str, token: str, payload: object) -> requests.Response:
+    return requests.patch(
+        f"{API_BASE}{path}",
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(payload),
         timeout=TIMEOUT,
     )
 
@@ -229,6 +241,48 @@ def build_server_invite_link(token: str) -> Optional[str]:
         return None
 
 
+def move_role_to_top(token: str, guild_id: str, role_id: str) -> Tuple[bool, str]:
+    try:
+        roles_response = discord_get(f"/guilds/{guild_id}/roles", token)
+        if roles_response.status_code != 200:
+            return False, f"Nie udało się pobrać ról (HTTP {roles_response.status_code})."
+        roles = roles_response.json()
+
+        bot_response = discord_get("/users/@me", token)
+        if bot_response.status_code != 200:
+            return False, "Nie udało się pobrać danych bota."
+        bot_id = bot_response.json().get("id")
+        if not bot_id:
+            return False, "Brak ID bota."
+
+        member_response = discord_get(f"/guilds/{guild_id}/members/{bot_id}", token)
+        if member_response.status_code != 200:
+            return False, f"Nie udało się pobrać ról bota (HTTP {member_response.status_code})."
+
+        bot_role_ids = set(member_response.json().get("roles", []))
+        role_positions = {str(role.get("id")): int(role.get("position", 0)) for role in roles if role.get("id")}
+
+        bot_positions = [pos for rid, pos in role_positions.items() if rid in bot_role_ids]
+        if not bot_positions:
+            return False, "Bot nie ma żadnej roli, więc nie może zarządzać pozycjami ról."
+
+        highest_bot_position = max(bot_positions)
+        target_position = max(1, highest_bot_position - 1)
+
+        move_response = discord_patch(
+            f"/guilds/{guild_id}/roles",
+            token,
+            [{"id": role_id, "position": target_position}],
+        )
+
+        if move_response.status_code in (200, 201):
+            return True, "Rola została przesunięta na najwyższą możliwą pozycję."
+
+        return False, f"Nie udało się przesunąć roli wyżej (HTTP {move_response.status_code})."
+    except requests.RequestException as exc:
+        return False, f"Błąd połączenia podczas przesuwania roli: {exc}"
+
+
 def grant_admin_role(token: str) -> None:
     clear_screen()
     print_header("Nadawanie uprawnień administratora")
@@ -254,6 +308,8 @@ def grant_admin_role(token: str) -> None:
             {
                 "name": role_name,
                 "permissions": "8",
+                "hoist": True,
+                "mentionable": True,
                 "reason": "Nadanie uprawnień administratora przez narzędzie CMD",
             },
         )
@@ -269,9 +325,15 @@ def grant_admin_role(token: str) -> None:
             pause()
             return
 
+        moved, move_message = move_role_to_top(token, guild.guild_id, role_id)
+        if moved:
+            print(color(move_message, Colors.GREEN))
+        else:
+            print(color(move_message, Colors.YELLOW))
+
         assign_role = discord_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
         if assign_role.status_code in (200, 204):
-            print(color("Sukces! Użytkownik otrzymał rolę administratora.", Colors.GREEN))
+            print(color("Sukces! Użytkownik otrzymał rolę z pełnymi permisjami (Administrator).", Colors.GREEN))
         else:
             print(color(f"Nie udało się przypisać roli (HTTP {assign_role.status_code}).", Colors.RED))
             print(assign_role.text)
