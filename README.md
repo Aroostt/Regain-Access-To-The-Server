@@ -27,9 +27,13 @@ pip install requests
 python discord_tool.py
 ```
 
-## Menu funkcji (bez przechodzenia do kategorii)
+## Menu funkcji
 
-Po wybraniu poprawnego tokenu wszystkie komendy są od razu widoczne na jednym ekranie, pod nagłówkami kategorii.
+Po wybraniu poprawnego tokenu komendy są na jednym ekranie, a nazwy kategorii są wyśrodkowane:
+
+- `[ Bot Information ]`
+- `[ Backup ]`
+
 Na górze zawsze są:
 
 - `01` **Back**
@@ -44,6 +48,8 @@ Na górze zawsze są:
 
 ### Backup
 
-6. **Full backup (roles/channels/emojis/stickers/etc)** – zapisuje pełny backup danych serwera do JSON (m.in. role, kanały, emotki, stickery, eventy oraz dane serwera).
+6. **Full backup** – zapisuje pełne dane serwera do JSON (dane serwera, role, kanały, emotki, stickery, eventy), opcjonalnie zapis wiadomości (max 100 na kanał).
+7. **Restore backup to another server** – przywraca backup na wybrany inny serwer oraz opcjonalnie odtwarza wiadomości przez webhooki.
+8. **Show backup information** – pokazuje informacje o backupie (data, serwer, owner ID, liczba ról/kanałów/emotek/wiadomości).
 
-> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami, przypisywanie ról, odczyt danych serwera).
+> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami/kanałami/webhookami, przypisywanie ról, odczyt danych serwera).
