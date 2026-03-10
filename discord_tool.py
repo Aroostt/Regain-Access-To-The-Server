@@ -114,6 +114,26 @@ def wait_for_enter(message: str = "Naciśnij ENTER, aby kontynuować...") -> Non
     input(color_text(f"\n{message}", UiColor.CYAN))
 
 
+def print_inline_status(message: str) -> None:
+    width = get_terminal_width() - 1
+    trimmed = message[:max(1, width)]
+    print(f"\r{trimmed.ljust(width)}", end="", flush=True)
+
+
+def clear_inline_status() -> None:
+    width = get_terminal_width() - 1
+    print(f"\r{' ' * width}\r", end="", flush=True)
+
+
+def format_backup_timestamp(raw: str) -> str:
+    if not raw:
+        return "-"
+    try:
+        return datetime.strptime(raw, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return raw
+
+
 def read_tokens_file() -> List[str]:
     if not os.path.exists(TOKENS_FILE):
         return []
@@ -406,7 +426,7 @@ def backup_full_server_data(token: str) -> None:
         if copy_messages and channels.get("ok"):
             text_channels = [ch for ch in channels["data"] if ch.get("type") == 0 and ch.get("id")]
             for idx, ch in enumerate(text_channels, 1):
-                print_centered(f"Pobieranie wiadomości: {idx}/{len(text_channels)}", UiColor.DARK_GRAY)
+                print_inline_status(f"Pobieranie wiadomości: {idx}/{len(text_channels)}")
                 msg_res = fetch(f"/channels/{ch['id']}/messages", params={"limit": 100})
                 if not msg_res.get("ok"):
                     continue
@@ -421,6 +441,7 @@ def backup_full_server_data(token: str) -> None:
                         "author_id": author.get("id"),
                     })
                 messages_by_channel[ch["id"]] = list(reversed(saved))
+            clear_inline_status()
 
         owner_id = guild_info.get("data", {}).get("owner_id") if guild_info.get("ok") else None
         os.makedirs(BACKUPS_DIR, exist_ok=True)
@@ -467,7 +488,7 @@ def show_backup_info() -> None:
             f"Serwer: {data.get('guild_name', '-')}",
             f"ID serwera: {data.get('guild_id', '-')}",
             f"Owner ID: {data.get('owner_id', '-')}",
-            f"Data utworzenia: {data.get('created_at', '-')}",
+            f"Data utworzenia: {format_backup_timestamp(data.get('created_at', ''))}",
             f"Liczba ról: {roles_count}",
             f"Liczba kanałów: {channels_count}",
             f"Liczba emotek: {emojis_count}",
@@ -518,7 +539,9 @@ def restore_backup_to_other_guild(token: str) -> None:
                 if new_id:
                     role_map[str(role.get("id"))] = new_id
                     created_roles += 1
-            print_centered(f"Status ról: {idx}/{len(manageable_roles)}", UiColor.DARK_GRAY)
+            print_inline_status(f"Status ról: {idx}/{len(manageable_roles)}")
+
+        clear_inline_status()
 
         category_channels = [c for c in channels_data if c.get("type") == 4]
         normal_channels = [c for c in channels_data if c.get("type") != 4]
@@ -541,7 +564,9 @@ def restore_backup_to_other_guild(token: str) -> None:
                 if new_id:
                     channel_map[str(channel.get("id"))] = new_id
                     created_channels += 1
-            print_centered(f"Status kanałów: {idx}/{len(channels_data)}", UiColor.DARK_GRAY)
+            print_inline_status(f"Status kanałów: {idx}/{len(channels_data)}")
+
+        clear_inline_status()
 
         restored_messages = 0
         if copy_messages and messages_data:
