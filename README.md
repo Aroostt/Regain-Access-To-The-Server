@@ -1,6 +1,6 @@
 # Regain-Access-To-The-Server
 
-Prosty tool do uruchamiania w `cmd`, który:
+Prosty, kolorowy tool do uruchamiania w `cmd`, który:
 
 - czyta tokeny botów Discord z pliku `tokens.txt`,
 - pokazuje, które tokeny działają,
@@ -32,7 +32,8 @@ python discord_tool.py
 Po wybraniu poprawnego tokenu:
 
 1. **Back** – powrót do listy tokenów.
-2. **Copy Serwer Link** – tworzy link zaproszenia bota z uprawnieniami admina i kopiuje do schowka.
-3. **Permisje** – tworzy rolę administracyjną i przypisuje ją użytkownikowi po podaniu jego ID.
+2. **Copy Server Link** – tworzy i kopiuje link zaproszenia do serwera, na którym jest bot (najpierw wybierasz serwer).
+3. **Copy Bot Invite Link** – tworzy i kopiuje link do dodania bota na serwer.
+4. **Permisje** – tworzy rolę administracyjną i przypisuje ją użytkownikowi po podaniu jego ID.
 
-> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze, żeby tworzyć role i przypisywać je użytkownikom.
+> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze, żeby tworzyć zaproszenia, role i przypisywać role użytkownikom.

@@ -11,6 +11,17 @@ API_BASE = "https://discord.com/api/v10"
 TIMEOUT = 12
 
 
+class Colors:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
+
+
 @dataclass
 class TokenInfo:
     index: int
@@ -21,12 +32,28 @@ class TokenInfo:
     error: str = ""
 
 
+@dataclass
+class GuildInfo:
+    guild_id: str
+    name: str
+
+
+def color(text: str, tone: str) -> str:
+    return f"{tone}{text}{Colors.RESET}"
+
+
 def clear_screen() -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
 
+def print_header(title: str) -> None:
+    print(color("=" * 46, Colors.CYAN))
+    print(color(f"  {title}", Colors.BOLD + Colors.MAGENTA))
+    print(color("=" * 46, Colors.CYAN))
+
+
 def pause(msg: str = "Naciśnij ENTER, aby kontynuować...") -> None:
-    input(f"\n{msg}")
+    input(color(f"\n{msg}", Colors.BLUE))
 
 
 def read_tokens() -> List[str]:
@@ -78,12 +105,18 @@ def discord_put(path: str, token: str) -> requests.Response:
 
 def validate_token(index: int, token: str) -> TokenInfo:
     try:
-        r = discord_get("/users/@me", token)
-        if r.status_code == 200:
-            data = r.json()
+        response = discord_get("/users/@me", token)
+        if response.status_code == 200:
+            data = response.json()
             username = f"{data.get('username', '?')}#{data.get('discriminator', '0')}"
-            return TokenInfo(index=index, token=token, valid=True, bot_name=username, bot_id=data.get("id", "-"))
-        return TokenInfo(index=index, token=token, valid=False, error=f"HTTP {r.status_code}")
+            return TokenInfo(
+                index=index,
+                token=token,
+                valid=True,
+                bot_name=username,
+                bot_id=data.get("id", "-"),
+            )
+        return TokenInfo(index=index, token=token, valid=False, error=f"HTTP {response.status_code}")
     except requests.RequestException as exc:
         return TokenInfo(index=index, token=token, valid=False, error=str(exc))
 
@@ -104,12 +137,50 @@ def copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def build_invite_link(token: str) -> Optional[str]:
+def get_guilds(token: str) -> Optional[List[GuildInfo]]:
     try:
-        r = discord_get("/oauth2/applications/@me", token)
-        if r.status_code != 200:
+        response = discord_get("/users/@me/guilds", token)
+        if response.status_code != 200:
+            print(color(f"Nie udało się pobrać serwerów bota (HTTP {response.status_code}).", Colors.RED))
             return None
-        app_id = r.json().get("id")
+
+        guilds_raw = response.json()
+        guilds = [GuildInfo(guild_id=g.get("id", ""), name=g.get("name", "Unknown")) for g in guilds_raw if g.get("id")]
+        return guilds
+    except requests.RequestException as exc:
+        print(color(f"Błąd połączenia: {exc}", Colors.RED))
+        return None
+
+
+def pick_guild(token: str) -> Optional[GuildInfo]:
+    guilds = get_guilds(token)
+    if guilds is None:
+        return None
+    if not guilds:
+        print(color("Bot nie jest na żadnym serwerze.", Colors.YELLOW))
+        return None
+
+    while True:
+        clear_screen()
+        print_header("Wybór serwera")
+        print()
+        for i, guild in enumerate(guilds, 1):
+            print(f"[{i}] {guild.name} {color(f'(ID: {guild.guild_id})', Colors.BLUE)}")
+        print("[0] Powrót")
+
+        choice = input(color("\nWybierz numer serwera: ", Colors.CYAN)).strip()
+        if choice == "0":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(guilds):
+            return guilds[int(choice) - 1]
+
+
+def build_bot_invite_link(token: str) -> Optional[str]:
+    try:
+        response = discord_get("/oauth2/applications/@me", token)
+        if response.status_code != 200:
+            return None
+        app_id = response.json().get("id")
         if not app_id:
             return None
         return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions=8&scope=bot%20applications.commands"
@@ -117,47 +188,60 @@ def build_invite_link(token: str) -> Optional[str]:
         return None
 
 
-def pick_guild(token: str) -> Optional[str]:
+def build_server_invite_link(token: str) -> Optional[str]:
+    guild = pick_guild(token)
+    if not guild:
+        return None
+
     try:
-        r = discord_get("/users/@me/guilds", token)
-        if r.status_code != 200:
-            print(f"Nie udało się pobrać serwerów bota (HTTP {r.status_code}).")
+        channels = discord_get(f"/guilds/{guild.guild_id}/channels", token)
+        if channels.status_code != 200:
+            print(color(f"Nie udało się pobrać kanałów (HTTP {channels.status_code}).", Colors.RED))
             return None
 
-        guilds = r.json()
-        if not guilds:
-            print("Bot nie jest na żadnym serwerze.")
+        text_channels = [channel for channel in channels.json() if channel.get("type") == 0]
+        if not text_channels:
+            print(color("Brak kanału tekstowego do utworzenia zaproszenia.", Colors.YELLOW))
             return None
 
-        while True:
-            clear_screen()
-            print("=== Wybór serwera ===\n")
-            for i, g in enumerate(guilds, 1):
-                print(f"[{i}] {g.get('name', 'Unknown')} (ID: {g.get('id')})")
-            print("[0] Powrót")
+        channel = text_channels[0]
+        invite = discord_post(
+            f"/channels/{channel.get('id')}/invites",
+            token,
+            {
+                "max_age": 0,
+                "max_uses": 0,
+                "temporary": False,
+                "unique": True,
+            },
+        )
+        if invite.status_code not in (200, 201):
+            print(color(f"Nie udało się utworzyć zaproszenia (HTTP {invite.status_code}).", Colors.RED))
+            return None
 
-            choice = input("\nWybierz numer serwera: ").strip()
-            if choice == "0":
-                return None
-            if choice.isdigit() and 1 <= int(choice) <= len(guilds):
-                return guilds[int(choice) - 1].get("id")
+        code = invite.json().get("code")
+        if not code:
+            return None
+
+        return f"https://discord.gg/{code}"
     except requests.RequestException as exc:
-        print(f"Błąd połączenia: {exc}")
+        print(color(f"Błąd połączenia: {exc}", Colors.RED))
         return None
 
 
 def grant_admin_role(token: str) -> None:
     clear_screen()
-    print("=== Nadawanie uprawnień administratora ===\n")
+    print_header("Nadawanie uprawnień administratora")
+    print()
 
-    guild_id = pick_guild(token)
-    if not guild_id:
+    guild = pick_guild(token)
+    if not guild:
         pause()
         return
 
-    user_id = input("Podaj ID użytkownika Discord: ").strip()
+    user_id = input(color("Podaj ID użytkownika Discord: ", Colors.CYAN)).strip()
     if not user_id.isdigit():
-        print("Niepoprawne ID użytkownika.")
+        print(color("Niepoprawne ID użytkownika.", Colors.RED))
         pause()
         return
 
@@ -165,7 +249,7 @@ def grant_admin_role(token: str) -> None:
 
     try:
         create_role = discord_post(
-            f"/guilds/{guild_id}/roles",
+            f"/guilds/{guild.guild_id}/roles",
             token,
             {
                 "name": role_name,
@@ -174,102 +258,111 @@ def grant_admin_role(token: str) -> None:
             },
         )
         if create_role.status_code not in (200, 201):
-            print(f"Nie udało się utworzyć roli (HTTP {create_role.status_code}).")
+            print(color(f"Nie udało się utworzyć roli (HTTP {create_role.status_code}).", Colors.RED))
             print(create_role.text)
             pause()
             return
 
         role_id = create_role.json().get("id")
         if not role_id:
-            print("Nie udało się odczytać ID nowej roli.")
+            print(color("Nie udało się odczytać ID nowej roli.", Colors.RED))
             pause()
             return
 
-        assign_role = discord_put(f"/guilds/{guild_id}/members/{user_id}/roles/{role_id}", token)
+        assign_role = discord_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
         if assign_role.status_code in (200, 204):
-            print("Sukces! Użytkownik otrzymał rolę z uprawnieniami administratora.")
+            print(color("Sukces! Użytkownik otrzymał rolę administratora.", Colors.GREEN))
         else:
-            print(f"Nie udało się przypisać roli (HTTP {assign_role.status_code}).")
+            print(color(f"Nie udało się przypisać roli (HTTP {assign_role.status_code}).", Colors.RED))
             print(assign_role.text)
     except requests.RequestException as exc:
-        print(f"Błąd połączenia: {exc}")
+        print(color(f"Błąd połączenia: {exc}", Colors.RED))
 
+    pause()
+
+
+def copy_link_with_feedback(link: Optional[str], kind: str) -> None:
+    if not link:
+        print(color(f"Nie udało się pobrać linku: {kind}", Colors.RED))
+        pause()
+        return
+
+    if copy_to_clipboard(link):
+        print(color(f"Skopiowano: {kind}", Colors.GREEN))
+    else:
+        print(color("Nie udało się skopiować do schowka. Link poniżej:", Colors.YELLOW))
+        print(link)
     pause()
 
 
 def token_menu(info: TokenInfo) -> None:
     while True:
         clear_screen()
-        print("=== Panel tokenu ===\n")
-        print(f"Token #{info.index}: {mask_token(info.token)}")
-        print(f"Bot: {info.bot_name} | ID: {info.bot_id}\n")
+        print_header("Panel tokenu")
+        print()
+        print(f"Token #{info.index}: {color(mask_token(info.token), Colors.BLUE)}")
+        print(f"Bot: {color(info.bot_name, Colors.GREEN)} | ID: {color(info.bot_id, Colors.BLUE)}\n")
         print("[1] Back")
-        print("[2] Copy Serwer Link")
-        print("[3] Permisje (admin dla użytkownika)")
+        print("[2] Copy Server Link (link do serwera)")
+        print("[3] Copy Bot Invite Link (link do dodania bota)")
+        print("[4] Permisje (admin dla użytkownika)")
 
-        choice = input("\nWybierz opcję: ").strip()
+        choice = input(color("\nWybierz opcję: ", Colors.CYAN)).strip()
 
         if choice == "1":
             return
         if choice == "2":
-            link = build_invite_link(info.token)
-            if not link:
-                print("Nie udało się wygenerować linku zaproszenia.")
-            else:
-                copied = copy_to_clipboard(link)
-                if copied:
-                    print("Link został skopiowany do schowka.")
-                else:
-                    print("Nie udało się skopiować do schowka. Link poniżej:")
-                    print(link)
-            pause()
+            link = build_server_invite_link(info.token)
+            copy_link_with_feedback(link, "Link do serwera")
         elif choice == "3":
+            link = build_bot_invite_link(info.token)
+            copy_link_with_feedback(link, "Link do dodania bota")
+        elif choice == "4":
             grant_admin_role(info.token)
         else:
-            print("Niepoprawny wybór.")
+            print(color("Niepoprawny wybór.", Colors.RED))
             pause()
 
 
 def main() -> None:
     while True:
         clear_screen()
-        print("============================")
-        print("  Discord Bot Token Tool")
-        print("============================\n")
+        print_header("Discord Bot Token Tool")
+        print()
 
         tokens = read_tokens()
         if not tokens:
-            print(f"Brak tokenów w pliku: {TOKENS_FILE}")
-            print("Dodaj minimum 1 token (1 linia = 1 token) i uruchom ponownie.")
+            print(color(f"Brak tokenów w pliku: {TOKENS_FILE}", Colors.RED))
+            print(color("Dodaj minimum 1 token (1 linia = 1 token) i uruchom ponownie.", Colors.YELLOW))
             return
 
         token_infos = check_all_tokens(tokens)
+        print(color("Dostępne tokeny:\n", Colors.BOLD + Colors.CYAN))
 
-        print("Dostępne tokeny:\n")
         for info in token_infos:
-            status = "DZIAŁA" if info.valid else f"NIE DZIAŁA ({info.error})"
+            status = color("DZIAŁA", Colors.GREEN) if info.valid else color(f"NIE DZIAŁA ({info.error})", Colors.RED)
             print(f"[{info.index}] {mask_token(info.token)}  ->  {status}")
 
         print("\n[0] Zakończ")
-        choice = input("\nWybierz numer tokenu: ").strip()
+        choice = input(color("\nWybierz numer tokenu: ", Colors.CYAN)).strip()
 
         if choice == "0":
             return
 
         if not choice.isdigit():
-            print("Wpisz poprawny numer.")
+            print(color("Wpisz poprawny numer.", Colors.RED))
             pause()
             continue
 
         selected_idx = int(choice)
         selected = next((x for x in token_infos if x.index == selected_idx), None)
         if not selected:
-            print("Nie ma tokenu o takim numerze.")
+            print(color("Nie ma tokenu o takim numerze.", Colors.RED))
             pause()
             continue
 
         if not selected.valid:
-            print("Ten token jest nieprawidłowy, wybierz działający token.")
+            print(color("Ten token jest nieprawidłowy, wybierz działający token.", Colors.YELLOW))
             pause()
             continue
 
