@@ -29,27 +29,26 @@ python discord_tool.py
 
 ## Menu funkcji
 
-Po wybraniu poprawnego tokenu komendy są na jednym ekranie, a nazwy kategorii są wyśrodkowane:
-
-- `[ Bot Information ]`
-- `[ Backup ]`
+Po wybraniu poprawnego tokenu komendy są na jednym ekranie, a nazwy kategorii są wyśrodkowane.
 
 Na górze zawsze są:
 
 - `01` **Back**
 - `00` **Zakończ program**
 
-### Bot Information
+### [ Bot Information ]
 
-2. **Copy server invite link** – creates and copies a server invite from a selected guild.
-3. **Copy bot invite link** – creates and copies bot OAuth invite link.
-4. **Give New Admin Role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
-5. **Give Best Existing Role** – assigns the highest existing role the bot can legally grant in hierarchy.
+2. **Show Bot Info** – pokazuje podstawowe informacje o bocie i aplikacji.
+3. **Copy server invite link** – creates and copies a server invite from a selected guild.
+4. **Copy bot invite link** – creates and copies bot OAuth invite link.
+5. **Give New Admin Role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
+6. **Give Best Existing Role** – assigns the highest existing role the bot can legally grant in hierarchy.
 
-### Backup
+### [ Backup ]
 
-6. **Full backup** – zapisuje pełne dane serwera do JSON (dane serwera, role, kanały, emotki, stickery, eventy), opcjonalnie zapis wiadomości (max 100 na kanał).
-7. **Restore backup to another server** – przywraca backup na wybrany inny serwer oraz opcjonalnie odtwarza wiadomości przez webhooki.
-8. **Show backup information** – pokazuje informacje o backupie (data, serwer, owner ID, liczba ról/kanałów/emotek/wiadomości).
+7. **Backup settings** – osobna konfiguracja backupu (limit wiadomości na kanał `1-1000`, czy zapisywać wiadomości, filtr ról).
+8. **Full backup** – zapisuje dane serwera do JSON (role/kanały/emotki/stickery/eventy + wiadomości wg ustawień).
+9. **Restore backup to another server** – przywraca backup na wybrany inny serwer oraz opcjonalnie odtwarza wiadomości przez webhooki.
+10. **Show backup information** – pokazuje informacje o backupie (data, serwer, owner ID, liczby elementów, limit i filtr ról).
 
 > Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami/kanałami/webhookami, przypisywanie ról, odczyt danych serwera).

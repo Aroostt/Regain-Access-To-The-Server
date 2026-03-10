@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -44,6 +44,21 @@ class BotTokenStatus:
 class GuildEntry:
     guild_id: str
     guild_name: str
+
+
+@dataclass
+class BackupSettings:
+    messages_per_channel: int = 100
+    copy_messages: bool = False
+    role_filter_ids: Optional[Set[str]] = None
+    role_filter_names: List[str] = None
+
+    def __post_init__(self) -> None:
+        if self.role_filter_names is None:
+            self.role_filter_names = []
+
+
+BACKUP_SETTINGS_BY_GUILD: Dict[str, BackupSettings] = {}
 
 
 def color_text(text: str, color: str) -> str:
@@ -132,6 +147,34 @@ def format_backup_timestamp(raw: str) -> str:
         return datetime.strptime(raw, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         return raw
+
+
+def ask_yes_no(question: str, default: bool = False) -> bool:
+    hint = "[T/n]" if default else "[t/N]"
+    value = input(color_text(f"\n{question} {hint}: ", UiColor.CYAN)).strip().lower()
+    if not value:
+        return default
+    return value in {"t", "tak", "y", "yes"}
+
+
+def ask_number(prompt: str, minimum: int, maximum: int, default: int) -> int:
+    while True:
+        value = input(color_text(f"\n{prompt} ({minimum}-{maximum}, domyślnie {default}): ", UiColor.CYAN)).strip()
+        if not value:
+            return default
+        if value.isdigit() and minimum <= int(value) <= maximum:
+            return int(value)
+        print_centered("Podaj poprawną wartość liczbową.", UiColor.RED)
+
+
+def fetch_json_data(token: str, path: str, params: Optional[dict] = None) -> Dict[str, object]:
+    try:
+        response = api_get(path, token, params=params)
+        if response.status_code == 200:
+            return {"ok": True, "status": 200, "data": response.json()}
+        return {"ok": False, "status": response.status_code, "error": response.text}
+    except requests.RequestException as exc:
+        return {"ok": False, "status": None, "error": str(exc)}
 
 
 def read_tokens_file() -> List[str]:
@@ -369,6 +412,94 @@ def grant_best_existing_role_to_user(token: str) -> None:
     wait_for_enter()
 
 
+def show_bot_info(token: str) -> None:
+    clear_console(); print_banner(); print(); print_centered("Show Bot Info", UiColor.LIGHT_GRAY); print()
+    bot = fetch_json_data(token, "/users/@me")
+    app = fetch_json_data(token, "/oauth2/applications/@me")
+    guilds = fetch_json_data(token, "/users/@me/guilds")
+    if not bot.get("ok"):
+        print_centered("Nie udało się pobrać informacji o bocie.", UiColor.RED)
+        wait_for_enter(); return
+
+    bot_data = bot.get("data", {}) if isinstance(bot.get("data"), dict) else {}
+    app_data = app.get("data", {}) if isinstance(app.get("data"), dict) else {}
+    guild_list = guilds.get("data", []) if isinstance(guilds.get("data"), list) else []
+
+    lines = [
+        f"Nazwa: {bot_data.get('username', '-')}",
+        f"ID bota: {bot_data.get('id', '-')}",
+        f"Zweryfikowany: {'Tak' if bot_data.get('verified') else 'Nie'}",
+        f"Aplikacja ID: {app_data.get('id', '-')}",
+        f"Nazwa aplikacji: {app_data.get('name', '-')}",
+        f"Publiczny bot: {'Tak' if app_data.get('bot_public') else 'Nie'}" if app_data else "Publiczny bot: -",
+        f"Na ilu serwerach: {len(guild_list)}",
+    ]
+    draw_centered_box(lines)
+    wait_for_enter()
+
+
+def parse_role_filter_selection(roles_data: List[dict]) -> Tuple[Optional[Set[str]], List[str]]:
+    selectable = [r for r in roles_data if r.get("name") != "@everyone" and r.get("id")]
+    if not selectable:
+        return None, []
+
+    clear_console(); print_banner(); print(); print_centered("Filtr ról do backupu", UiColor.LIGHT_GRAY); print()
+    lines = ["Podaj numery ról (np. 1,2,3). ENTER = wszystkie role"]
+    for idx, role in enumerate(selectable, 1):
+        lines.append(f"[{idx}] {role.get('name', 'Unknown')}")
+    draw_centered_box(lines)
+
+    value = input(color_text("\n-> ", UiColor.CYAN)).strip()
+    if not value:
+        return None, []
+
+    selected_ids: Set[str] = set()
+    selected_names: List[str] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part.isdigit():
+            continue
+        i = int(part)
+        if 1 <= i <= len(selectable):
+            role = selectable[i - 1]
+            rid = str(role.get("id"))
+            if rid not in selected_ids:
+                selected_ids.add(rid)
+                selected_names.append(role.get("name", "Unknown"))
+
+    if not selected_ids:
+        return None, []
+    return selected_ids, selected_names
+
+
+def configure_backup_settings(token: str) -> None:
+    clear_console(); print_banner(); print(); print_centered("Backup settings", UiColor.LIGHT_GRAY)
+    guild = choose_guild(token, "Wybierz serwer dla Backup settings")
+    if not guild:
+        wait_for_enter(); return
+
+    current = BACKUP_SETTINGS_BY_GUILD.get(guild.guild_id, BackupSettings())
+    current.messages_per_channel = ask_number("Limit wiadomości na kanał", 1, 1000, current.messages_per_channel)
+    current.copy_messages = ask_yes_no("Zapisywać wiadomości?", current.copy_messages)
+
+    roles = fetch_json_data(token, f"/guilds/{guild.guild_id}/roles")
+    if roles.get("ok") and isinstance(roles.get("data"), list):
+        role_ids, role_names = parse_role_filter_selection(roles["data"])
+        current.role_filter_ids = role_ids
+        current.role_filter_names = role_names
+
+    BACKUP_SETTINGS_BY_GUILD[guild.guild_id] = current
+
+    clear_console(); print_banner(); print(); print_centered("Backup settings zapisane", UiColor.GREEN); print()
+    draw_centered_box([
+        f"Serwer: {guild.guild_name}",
+        f"Limit wiadomości/kanał: {current.messages_per_channel}",
+        f"Zapis wiadomości: {'Tak' if current.copy_messages else 'Nie'}",
+        f"Filtr ról: {', '.join(current.role_filter_names) if current.role_filter_names else 'Wszystkie'}",
+    ])
+    wait_for_enter()
+
+
 def show_link_result_and_copy(link: Optional[str], label: str) -> None:
     if not link:
         print_centered(f"Nie udało się wygenerować: {label}", UiColor.RED); wait_for_enter(); return
@@ -403,7 +534,9 @@ def backup_full_server_data(token: str) -> None:
     if not guild:
         wait_for_enter(); return
 
-    copy_messages = input(color_text("\nCzy zapisać także wiadomości (max 100 na kanał)? [t/N]: ", UiColor.CYAN)).strip().lower() == 't'
+    settings = BACKUP_SETTINGS_BY_GUILD.get(guild.guild_id, BackupSettings())
+    copy_messages = settings.copy_messages
+    messages_limit = settings.messages_per_channel
 
     def fetch(path: str, params: Optional[dict] = None) -> Dict[str, object]:
         try:
@@ -427,7 +560,7 @@ def backup_full_server_data(token: str) -> None:
             text_channels = [ch for ch in channels["data"] if ch.get("type") == 0 and ch.get("id")]
             for idx, ch in enumerate(text_channels, 1):
                 print_inline_status(f"Pobieranie wiadomości: {idx}/{len(text_channels)}")
-                msg_res = fetch(f"/channels/{ch['id']}/messages", params={"limit": 100})
+                msg_res = fetch(f"/channels/{ch['id']}/messages", params={"limit": messages_limit})
                 if not msg_res.get("ok"):
                     continue
                 saved = []
@@ -439,6 +572,8 @@ def backup_full_server_data(token: str) -> None:
                         "author_name": author.get("username", "Unknown"),
                         "author_avatar": author.get("avatar"),
                         "author_id": author.get("id"),
+                        "embeds": msg.get("embeds", []),
+                        "attachments": msg.get("attachments", []),
                     })
                 messages_by_channel[ch["id"]] = list(reversed(saved))
             clear_inline_status()
@@ -448,15 +583,27 @@ def backup_full_server_data(token: str) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join(BACKUPS_DIR, f"full_backup_{guild.guild_id}_{timestamp}.json")
 
+        role_ids = settings.role_filter_ids
+        role_names = settings.role_filter_names
+        roles_payload = roles
+        if role_ids and roles.get("ok") and isinstance(roles.get("data"), list):
+            roles_payload = {
+                "ok": True,
+                "status": 200,
+                "data": [r for r in roles["data"] if r.get("name") == "@everyone" or str(r.get("id")) in role_ids],
+            }
+
         payload = {
             "guild_id": guild.guild_id,
             "guild_name": guild.guild_name,
             "owner_id": owner_id,
             "created_at": timestamp,
             "messages_saved": copy_messages,
+            "messages_limit_per_channel": messages_limit,
+            "selected_role_names": role_names,
             "backup_scope": ["guild", "roles", "channels", "emojis", "stickers", "scheduled_events", "messages_optional"],
             "guild": guild_info,
-            "roles": roles,
+            "roles": roles_payload,
             "channels": channels,
             "emojis": emojis,
             "stickers": stickers,
@@ -483,6 +630,7 @@ def show_backup_info() -> None:
         emojis_count = len(data.get("emojis", {}).get("data", []) if isinstance(data.get("emojis"), dict) else [])
         messages_count = sum(len(v) for v in data.get("messages", {}).values()) if isinstance(data.get("messages"), dict) else 0
         clear_console(); print_banner(); print(); print_centered("Informacje o backupie", UiColor.LIGHT_GRAY); print()
+        role_filter = data.get("selected_role_names", [])
         info_lines = [
             f"Plik: {os.path.basename(path)}",
             f"Serwer: {data.get('guild_name', '-')}",
@@ -492,6 +640,8 @@ def show_backup_info() -> None:
             f"Liczba ról: {roles_count}",
             f"Liczba kanałów: {channels_count}",
             f"Liczba emotek: {emojis_count}",
+            f"Limit wiadomości/kanał: {data.get('messages_limit_per_channel', 100)}",
+            f"Filtr ról: {', '.join(role_filter) if isinstance(role_filter, list) and role_filter else 'Wszystkie'}",
             f"Zapisane wiadomości: {messages_count}",
         ]
         draw_centered_box(info_lines)
@@ -585,10 +735,20 @@ def restore_backup_to_other_guild(token: str) -> None:
                     author_id = msg.get("author_id")
                     avatar_url = f"https://cdn.discordapp.com/avatars/{author_id}/{avatar_hash}.png" if avatar_hash and author_id else None
                     content = msg.get("content", "")
-                    if not content:
+                    embeds = msg.get("embeds", []) if isinstance(msg.get("embeds"), list) else []
+                    attachments = msg.get("attachments", []) if isinstance(msg.get("attachments"), list) else []
+                    attachment_urls = [a.get("url") for a in attachments if isinstance(a, dict) and a.get("url")]
+                    if not content and not embeds and not attachment_urls:
                         continue
+                    payload = {"username": username, "avatar_url": avatar_url}
+                    if content:
+                        payload["content"] = content
+                    if embeds:
+                        payload["embeds"] = embeds
+                    if attachment_urls:
+                        payload["content"] = (payload.get("content", "") + "\n" + "\n".join(attachment_urls)).strip()
                     try:
-                        requests.post(webhook_url, json={"username": username, "avatar_url": avatar_url, "content": content}, timeout=REQUEST_TIMEOUT)
+                        requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
                         restored_messages += 1
                     except requests.RequestException:
                         continue
@@ -617,15 +777,17 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
             "«00» Zakończ program",
             "────────────────────────────────────────────────────────",
             centered_plain("[ Bot Information ]", width),
-            "«02» Copy server invite link",
-            "«03» Copy bot invite link",
-            "«04» Give New Admin Role",
-            "«05» Give Best Existing Role",
+            "«02» Show Bot Info",
+            "«03» Copy server invite link",
+            "«04» Copy bot invite link",
+            "«05» Give New Admin Role",
+            "«06» Give Best Existing Role",
             "────────────────────────────────────────────────────────",
             centered_plain("[ Backup ]", width),
-            "«06» Full backup (roles/channels/emojis/stickers/etc)",
-            "«07» Restore backup to another server",
-            "«08» Show backup information",
+            "«07» Backup settings",
+            "«08» Full backup (roles/channels/emojis/stickers/etc)",
+            "«09» Restore backup to another server",
+            "«10» Show backup information",
         ]
         draw_centered_box(menu_lines)
 
@@ -635,18 +797,22 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
         if choice in {"0", "00"}:
             raise SystemExit
         if choice in {"2", "02"}:
-            show_link_result_and_copy(create_guild_invite_link(selected_token.token), "Server invite link")
+            show_bot_info(selected_token.token)
         elif choice in {"3", "03"}:
-            show_link_result_and_copy(create_bot_invite_link(selected_token.token), "Bot invite link")
+            show_link_result_and_copy(create_guild_invite_link(selected_token.token), "Server invite link")
         elif choice in {"4", "04"}:
-            grant_admin_role_to_user(selected_token.token)
+            show_link_result_and_copy(create_bot_invite_link(selected_token.token), "Bot invite link")
         elif choice in {"5", "05"}:
-            grant_best_existing_role_to_user(selected_token.token)
+            grant_admin_role_to_user(selected_token.token)
         elif choice in {"6", "06"}:
-            backup_full_server_data(selected_token.token)
+            grant_best_existing_role_to_user(selected_token.token)
         elif choice in {"7", "07"}:
-            restore_backup_to_other_guild(selected_token.token)
+            configure_backup_settings(selected_token.token)
         elif choice in {"8", "08"}:
+            backup_full_server_data(selected_token.token)
+        elif choice in {"9", "09"}:
+            restore_backup_to_other_guild(selected_token.token)
+        elif choice in {"10", "010"}:
             show_backup_info()
         else:
             print_centered("Niepoprawna opcja.", UiColor.RED); wait_for_enter()
