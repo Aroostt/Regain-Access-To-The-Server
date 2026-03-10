@@ -1,157 +1,164 @@
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
 TOKENS_FILE = "tokens.txt"
 API_BASE = "https://discord.com/api/v10"
-TIMEOUT = 12
+REQUEST_TIMEOUT = 12
 
 
-class Colors:
+class UiColor:
     RESET = "\033[0m"
     BOLD = "\033[1m"
-    DIM = "\033[2m"
+    WHITE = "\033[97m"
+    LIGHT_GRAY = "\033[37m"
+    DARK_GRAY = "\033[90m"
     CYAN = "\033[96m"
     GREEN = "\033[92m"
     RED = "\033[91m"
     YELLOW = "\033[93m"
-    BLUE = "\033[94m"
-    MAGENTA = "\033[95m"
-    WHITE = "\033[97m"
 
 
 @dataclass
-class TokenInfo:
+class BotTokenStatus:
     index: int
     token: str
-    valid: bool
+    is_valid: bool
     bot_name: str = "-"
     bot_id: str = "-"
     error: str = ""
 
 
 @dataclass
-class GuildInfo:
+class GuildEntry:
     guild_id: str
-    name: str
+    guild_name: str
 
 
-def color(text: str, tone: str) -> str:
-    return f"{tone}{text}{Colors.RESET}"
+def color_text(text: str, color: str) -> str:
+    return f"{color}{text}{UiColor.RESET}"
 
 
-def clear_screen() -> None:
+def clear_console() -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def banner() -> None:
-    print(color("""
-                                ██████╗██╗    ██╗███████╗██╗     ██╗██╗   ██╗███╗   ███╗
-                               ██╔════╝██║    ██║██╔════╝██║     ██║██║   ██║████╗ ████║
-                               ██║     ██║ █╗ ██║█████╗  ██║     ██║██║   ██║██╔████╔██║
-                               ██║     ██║███╗██║██╔══╝  ██║     ██║██║   ██║██║╚██╔╝██║
-                               ╚██████╗╚███╔███╔╝███████╗███████╗██║╚██████╔╝██║ ╚═╝ ██║
-                                ╚═════╝ ╚══╝╚══╝ ╚══════╝╚══════╝╚═╝ ╚═════╝ ╚═╝     ╚═╝
-""".rstrip("\n"), Colors.WHITE + Colors.BOLD))
+def get_terminal_width(default_width: int = 120) -> int:
+    try:
+        return shutil.get_terminal_size((default_width, 30)).columns
+    except Exception:
+        return default_width
 
 
-def print_main_header(tokens_count: int) -> None:
-    banner()
-    print()
-    info = f"Loaded <{tokens_count}> tokens"
-    print(color(f"{' ' * 42}{info}", Colors.DIM + Colors.CYAN))
-    print()
+def center_line(text: str) -> str:
+    return text.center(get_terminal_width())
 
 
-def print_box(lines: List[str]) -> None:
-    width = max(len(line) for line in lines) + 2
-    print(color(f"╭{'─' * width}╮", Colors.CYAN))
+def print_centered(text: str, color: str = UiColor.LIGHT_GRAY) -> None:
+    print(color_text(center_line(text), color))
+
+
+def print_banner() -> None:
+    art = [
+        " ██████╗██╗    ██╗███████╗██╗     ██╗██╗   ██╗███╗   ███╗",
+        "██╔════╝██║    ██║██╔════╝██║     ██║██║   ██║████╗ ████║",
+        "██║     ██║ █╗ ██║█████╗  ██║     ██║██║   ██║██╔████╔██║",
+        "██║     ██║███╗██║██╔══╝  ██║     ██║██║   ██║██║╚██╔╝██║",
+        "╚██████╗╚███╔███╔╝███████╗███████╗██║╚██████╔╝██║ ╚═╝ ██║",
+        " ╚═════╝ ╚══╝╚══╝ ╚══════╝╚══════╝╚═╝ ╚═════╝ ╚═╝     ╚═╝",
+    ]
+    for line in art:
+        print_centered(line, UiColor.WHITE + UiColor.BOLD)
+
+
+def draw_centered_box(lines: List[str]) -> None:
+    inner_width = max(len(line) for line in lines) + 2
+    box_width = inner_width + 2
+    indent = max(0, (get_terminal_width() - box_width) // 2)
+    pad = " " * indent
+
+    print(color_text(f"{pad}╭{'─' * inner_width}╮", UiColor.LIGHT_GRAY))
     for line in lines:
-        print(color(f"│ {line.ljust(width - 1)}│", Colors.CYAN))
-    print(color(f"╰{'─' * width}╯", Colors.CYAN))
+        print(color_text(f"{pad}│ {line.ljust(inner_width - 1)}│", UiColor.LIGHT_GRAY))
+    print(color_text(f"{pad}╰{'─' * inner_width}╯", UiColor.LIGHT_GRAY))
 
 
-def pause(msg: str = "Naciśnij ENTER, aby kontynuować...") -> None:
-    input(color(f"\n{msg}", Colors.BLUE))
+def wait_for_enter(message: str = "Press ENTER to continue...") -> None:
+    input(color_text(f"\n{center_line(message)}", UiColor.CYAN))
 
 
-def read_tokens() -> List[str]:
+def read_tokens_file() -> List[str]:
     if not os.path.exists(TOKENS_FILE):
         return []
 
-    tokens: List[str] = []
-    with open(TOKENS_FILE, "r", encoding="utf-8") as f:
-        for line in f:
+    result: List[str] = []
+    with open(TOKENS_FILE, "r", encoding="utf-8") as file:
+        for line in file:
             token = line.strip()
             if token and not token.startswith("#"):
-                tokens.append(token)
-    return tokens
+                result.append(token)
+    return result
 
 
-def mask_token(token: str) -> str:
+def hide_token(token: str) -> str:
     if len(token) <= 10:
         return "*" * len(token)
     return f"{token[:5]}...{token[-5:]}"
 
 
-def discord_get(path: str, token: str) -> requests.Response:
+def api_get(path: str, token: str) -> requests.Response:
     return requests.get(
         f"{API_BASE}{path}",
         headers={"Authorization": f"Bot {token}"},
-        timeout=TIMEOUT,
+        timeout=REQUEST_TIMEOUT,
     )
 
 
-def discord_post(path: str, token: str, payload: dict) -> requests.Response:
+def api_post(path: str, token: str, payload: dict) -> requests.Response:
     return requests.post(
         f"{API_BASE}{path}",
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
         data=json.dumps(payload),
-        timeout=TIMEOUT,
+        timeout=REQUEST_TIMEOUT,
     )
 
 
-def discord_put(path: str, token: str) -> requests.Response:
+def api_put(path: str, token: str) -> requests.Response:
     return requests.put(
         f"{API_BASE}{path}",
         headers={"Authorization": f"Bot {token}"},
-        timeout=TIMEOUT,
+        timeout=REQUEST_TIMEOUT,
     )
 
 
-def discord_patch(path: str, token: str, payload: object) -> requests.Response:
+def api_patch(path: str, token: str, payload: object) -> requests.Response:
     return requests.patch(
         f"{API_BASE}{path}",
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
         data=json.dumps(payload),
-        timeout=TIMEOUT,
+        timeout=REQUEST_TIMEOUT,
     )
 
 
-def validate_token(index: int, token: str) -> TokenInfo:
+def validate_single_token(index: int, token: str) -> BotTokenStatus:
     try:
-        response = discord_get("/users/@me", token)
+        response = api_get("/users/@me", token)
         if response.status_code == 200:
             data = response.json()
-            username = f"{data.get('username', '?')}#{data.get('discriminator', '0')}"
-            return TokenInfo(index=index, token=token, valid=True, bot_name=username, bot_id=data.get("id", "-"))
-        return TokenInfo(index=index, token=token, valid=False, error=f"HTTP {response.status_code}")
+            full_name = f"{data.get('username', '?')}#{data.get('discriminator', '0')}"
+            return BotTokenStatus(index=index, token=token, is_valid=True, bot_name=full_name, bot_id=data.get("id", "-"))
+        return BotTokenStatus(index=index, token=token, is_valid=False, error=f"HTTP {response.status_code}")
     except requests.RequestException as exc:
-        return TokenInfo(index=index, token=token, valid=False, error=str(exc))
+        return BotTokenStatus(index=index, token=token, is_valid=False, error=str(exc))
 
 
-def check_all_tokens(tokens: List[str]) -> List[TokenInfo]:
-    return [validate_token(i + 1, token) for i, token in enumerate(tokens)]
+def validate_all_tokens(tokens: List[str]) -> List[BotTokenStatus]:
+    return [validate_single_token(i + 1, token) for i, token in enumerate(tokens)]
 
 
 def copy_to_clipboard(text: str) -> bool:
@@ -165,44 +172,51 @@ def copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def get_guilds(token: str) -> Optional[List[GuildInfo]]:
+def fetch_bot_guilds(token: str) -> Optional[List[GuildEntry]]:
     try:
-        response = discord_get("/users/@me/guilds", token)
+        response = api_get("/users/@me/guilds", token)
         if response.status_code != 200:
-            print(color(f"Nie udało się pobrać serwerów bota (HTTP {response.status_code}).", Colors.RED))
+            print_centered(f"Cannot load guilds (HTTP {response.status_code}).", UiColor.RED)
             return None
-        guilds_raw = response.json()
-        return [GuildInfo(guild_id=g.get("id", ""), name=g.get("name", "Unknown")) for g in guilds_raw if g.get("id")]
+
+        guilds: List[GuildEntry] = []
+        for item in response.json():
+            if item.get("id"):
+                guilds.append(GuildEntry(guild_id=item["id"], guild_name=item.get("name", "Unknown")))
+        return guilds
     except requests.RequestException as exc:
-        print(color(f"Błąd połączenia: {exc}", Colors.RED))
+        print_centered(f"Network error: {exc}", UiColor.RED)
         return None
 
 
-def pick_guild(token: str) -> Optional[GuildInfo]:
-    guilds = get_guilds(token)
+def choose_guild(token: str) -> Optional[GuildEntry]:
+    guilds = fetch_bot_guilds(token)
     if guilds is None:
         return None
     if not guilds:
-        print(color("Bot nie jest na żadnym serwerze.", Colors.YELLOW))
+        print_centered("Bot is not in any guild.", UiColor.YELLOW)
         return None
 
     while True:
-        clear_screen()
-        banner()
-        print(color("\n  Wybór serwera:\n", Colors.CYAN))
-        for i, guild in enumerate(guilds, 1):
-            print(f"  [{i}] {guild.name} {color(f'(ID: {guild.guild_id})', Colors.DIM + Colors.BLUE)}")
-        print("  [0] Powrót")
-        choice = input(color("\n  -> ", Colors.CYAN)).strip()
+        clear_console()
+        print_banner()
+        print()
+        print_centered("Select guild", UiColor.LIGHT_GRAY)
+        print()
+        for idx, guild in enumerate(guilds, 1):
+            print_centered(f"[{idx}] {guild.guild_name} ({guild.guild_id})", UiColor.DARK_GRAY)
+        print_centered("[0] Back", UiColor.DARK_GRAY)
+
+        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
         if choice == "0":
             return None
         if choice.isdigit() and 1 <= int(choice) <= len(guilds):
             return guilds[int(choice) - 1]
 
 
-def build_bot_invite_link(token: str) -> Optional[str]:
+def create_bot_invite_link(token: str) -> Optional[str]:
     try:
-        response = discord_get("/oauth2/applications/@me", token)
+        response = api_get("/oauth2/applications/@me", token)
         if response.status_code != 200:
             return None
         app_id = response.json().get("id")
@@ -213,100 +227,103 @@ def build_bot_invite_link(token: str) -> Optional[str]:
         return None
 
 
-def build_server_invite_link(token: str) -> Optional[str]:
-    guild = pick_guild(token)
+def create_guild_invite_link(token: str) -> Optional[str]:
+    guild = choose_guild(token)
     if not guild:
         return None
+
     try:
-        channels = discord_get(f"/guilds/{guild.guild_id}/channels", token)
-        if channels.status_code != 200:
-            print(color(f"Nie udało się pobrać kanałów (HTTP {channels.status_code}).", Colors.RED))
+        channels_response = api_get(f"/guilds/{guild.guild_id}/channels", token)
+        if channels_response.status_code != 200:
+            print_centered(f"Cannot load channels (HTTP {channels_response.status_code}).", UiColor.RED)
             return None
-        text_channels = [channel for channel in channels.json() if channel.get("type") == 0]
+
+        text_channels = [c for c in channels_response.json() if c.get("type") == 0]
         if not text_channels:
-            print(color("Brak kanału tekstowego do utworzenia zaproszenia.", Colors.YELLOW))
+            print_centered("No text channel found for invite.", UiColor.YELLOW)
             return None
-        channel = text_channels[0]
-        invite = discord_post(
-            f"/channels/{channel.get('id')}/invites",
+
+        invite_response = api_post(
+            f"/channels/{text_channels[0].get('id')}/invites",
             token,
             {"max_age": 0, "max_uses": 0, "temporary": False, "unique": True},
         )
-        if invite.status_code not in (200, 201):
-            print(color(f"Nie udało się utworzyć zaproszenia (HTTP {invite.status_code}).", Colors.RED))
+        if invite_response.status_code not in (200, 201):
+            print_centered(f"Cannot create invite (HTTP {invite_response.status_code}).", UiColor.RED)
             return None
-        code = invite.json().get("code")
-        return f"https://discord.gg/{code}" if code else None
+
+        invite_code = invite_response.json().get("code")
+        return f"https://discord.gg/{invite_code}" if invite_code else None
     except requests.RequestException as exc:
-        print(color(f"Błąd połączenia: {exc}", Colors.RED))
+        print_centered(f"Network error: {exc}", UiColor.RED)
         return None
 
 
-def get_bot_member_and_positions(token: str, guild_id: str) -> Tuple[Optional[str], dict, List[str]]:
-    roles_response = discord_get(f"/guilds/{guild_id}/roles", token)
+def get_bot_role_context(token: str, guild_id: str) -> Tuple[Dict[str, int], List[str]]:
+    roles_response = api_get(f"/guilds/{guild_id}/roles", token)
     if roles_response.status_code != 200:
-        return None, {}, []
-    roles = roles_response.json()
-    role_positions = {str(role.get("id")): int(role.get("position", 0)) for role in roles if role.get("id")}
+        return {}, []
 
-    bot_response = discord_get("/users/@me", token)
-    if bot_response.status_code != 200:
-        return None, role_positions, []
+    role_positions = {
+        str(role.get("id")): int(role.get("position", 0))
+        for role in roles_response.json()
+        if role.get("id")
+    }
+
+    bot_response = api_get("/users/@me", token)
+    if bot_response.status_code != 200 or not bot_response.json().get("id"):
+        return role_positions, []
+
     bot_id = bot_response.json().get("id")
-    if not bot_id:
-        return None, role_positions, []
-
-    member_response = discord_get(f"/guilds/{guild_id}/members/{bot_id}", token)
+    member_response = api_get(f"/guilds/{guild_id}/members/{bot_id}", token)
     if member_response.status_code != 200:
-        return None, role_positions, []
+        return role_positions, []
 
-    bot_role_ids = member_response.json().get("roles", [])
-    return bot_id, role_positions, bot_role_ids
+    return role_positions, member_response.json().get("roles", [])
 
 
-def move_role_to_top(token: str, guild_id: str, role_id: str) -> Tuple[bool, str]:
+def move_role_to_highest_possible(token: str, guild_id: str, role_id: str) -> Tuple[bool, str]:
     try:
-        _, role_positions, bot_role_ids = get_bot_member_and_positions(token, guild_id)
+        role_positions, bot_role_ids = get_bot_role_context(token, guild_id)
         if not role_positions:
-            return False, "Nie udało się pobrać pozycji ról."
+            return False, "Cannot read role positions."
 
-        bot_positions = [pos for rid, pos in role_positions.items() if rid in set(bot_role_ids)]
-        if not bot_positions:
-            return False, "Bot nie ma roli do zarządzania hierarchią."
+        bot_top_positions = [role_positions.get(rid, 0) for rid in bot_role_ids if rid in role_positions]
+        if not bot_top_positions:
+            return False, "Bot has no manageable role in hierarchy."
 
-        highest_bot_position = max(bot_positions)
-        target_position = max(1, highest_bot_position - 1)
-
-        move_response = discord_patch(
+        target_position = max(1, max(bot_top_positions) - 1)
+        response = api_patch(
             f"/guilds/{guild_id}/roles",
             token,
             [{"id": role_id, "position": target_position}],
         )
-        if move_response.status_code in (200, 201):
-            return True, "Rola została przesunięta na najwyższą możliwą pozycję."
-        return False, f"Nie udało się przesunąć roli wyżej (HTTP {move_response.status_code})."
+        if response.status_code in (200, 201):
+            return True, "Role moved to highest possible position."
+        return False, f"Role move failed (HTTP {response.status_code})."
     except requests.RequestException as exc:
-        return False, f"Błąd połączenia podczas przesuwania roli: {exc}"
+        return False, f"Network error during role move: {exc}"
 
 
-def grant_admin_role(token: str) -> None:
-    clear_screen()
-    banner()
-    print(color("\n  Nadawanie roli Administrator\n", Colors.CYAN))
+def grant_admin_role_to_user(token: str) -> None:
+    clear_console()
+    print_banner()
+    print()
+    print_centered("Grant admin role", UiColor.LIGHT_GRAY)
 
-    guild = pick_guild(token)
+    guild = choose_guild(token)
     if not guild:
-        pause()
+        wait_for_enter()
         return
 
-    user_id = input(color("\n  Podaj ID użytkownika Discord: ", Colors.CYAN)).strip()
+    user_id = input(color_text(f"\n{center_line('Enter Discord user ID: ')}", UiColor.CYAN)).strip()
     if not user_id.isdigit():
-        print(color("Niepoprawne ID użytkownika.", Colors.RED))
-        pause()
+        print_centered("Invalid user ID.", UiColor.RED)
+        wait_for_enter()
         return
 
     try:
-        create_role = discord_post(
+        create_role_response = api_post(
             f"/guilds/{guild.guild_id}/roles",
             token,
             {
@@ -314,70 +331,71 @@ def grant_admin_role(token: str) -> None:
                 "permissions": "8",
                 "hoist": True,
                 "mentionable": True,
-                "reason": "Nadanie roli administratora przez narzędzie",
+                "reason": "Grant full admin role from CLI tool",
             },
         )
-        if create_role.status_code not in (200, 201):
-            print(color(f"Nie udało się utworzyć roli (HTTP {create_role.status_code}).", Colors.RED))
-            print(create_role.text)
-            pause()
+        if create_role_response.status_code not in (200, 201):
+            print_centered(f"Role creation failed (HTTP {create_role_response.status_code}).", UiColor.RED)
+            print(create_role_response.text)
+            wait_for_enter()
             return
 
-        role_id = create_role.json().get("id")
+        role_id = create_role_response.json().get("id")
         if not role_id:
-            print(color("Nie udało się odczytać ID nowej roli.", Colors.RED))
-            pause()
+            print_centered("Cannot read created role ID.", UiColor.RED)
+            wait_for_enter()
             return
 
-        moved, msg = move_role_to_top(token, guild.guild_id, role_id)
-        print(color(msg, Colors.GREEN if moved else Colors.YELLOW))
+        moved, move_message = move_role_to_highest_possible(token, guild.guild_id, role_id)
+        print_centered(move_message, UiColor.GREEN if moved else UiColor.YELLOW)
 
-        assign_role = discord_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
-        if assign_role.status_code in (200, 204):
-            print(color("Sukces! Użytkownik otrzymał rolę Administrator.", Colors.GREEN))
+        assign_response = api_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
+        if assign_response.status_code in (200, 204):
+            print_centered("Success: admin role granted.", UiColor.GREEN)
         else:
-            print(color(f"Nie udało się przypisać roli (HTTP {assign_role.status_code}).", Colors.RED))
-            print(assign_role.text)
+            print_centered(f"Role assign failed (HTTP {assign_response.status_code}).", UiColor.RED)
+            print(assign_response.text)
     except requests.RequestException as exc:
-        print(color(f"Błąd połączenia: {exc}", Colors.RED))
+        print_centered(f"Network error: {exc}", UiColor.RED)
 
-    pause()
+    wait_for_enter()
 
 
-def assign_best_existing_role(token: str) -> None:
-    clear_screen()
-    banner()
-    print(color("\n  Nadawanie najlepszej istniejącej rangi\n", Colors.CYAN))
+def grant_best_existing_role_to_user(token: str) -> None:
+    clear_console()
+    print_banner()
+    print()
+    print_centered("Grant best existing role", UiColor.LIGHT_GRAY)
 
-    guild = pick_guild(token)
+    guild = choose_guild(token)
     if not guild:
-        pause()
+        wait_for_enter()
         return
 
-    user_id = input(color("\n  Podaj ID użytkownika Discord: ", Colors.CYAN)).strip()
+    user_id = input(color_text(f"\n{center_line('Enter Discord user ID: ')}", UiColor.CYAN)).strip()
     if not user_id.isdigit():
-        print(color("Niepoprawne ID użytkownika.", Colors.RED))
-        pause()
+        print_centered("Invalid user ID.", UiColor.RED)
+        wait_for_enter()
         return
 
     try:
-        _, role_positions, bot_role_ids = get_bot_member_and_positions(token, guild.guild_id)
+        role_positions, bot_role_ids = get_bot_role_context(token, guild.guild_id)
         if not role_positions or not bot_role_ids:
-            print(color("Nie udało się ustalić hierarchii ról bota.", Colors.RED))
-            pause()
+            print_centered("Cannot determine bot role hierarchy.", UiColor.RED)
+            wait_for_enter()
             return
 
         highest_bot_position = max(role_positions.get(role_id, 0) for role_id in bot_role_ids)
 
-        roles_response = discord_get(f"/guilds/{guild.guild_id}/roles", token)
+        roles_response = api_get(f"/guilds/{guild.guild_id}/roles", token)
         if roles_response.status_code != 200:
-            print(color(f"Nie udało się pobrać ról serwera (HTTP {roles_response.status_code}).", Colors.RED))
-            pause()
+            print_centered(f"Cannot read server roles (HTTP {roles_response.status_code}).", UiColor.RED)
+            wait_for_enter()
             return
 
-        roles = roles_response.json()
         manageable_roles = [
-            role for role in roles
+            role
+            for role in roles_response.json()
             if role.get("id")
             and role.get("name") != "@everyone"
             and not role.get("managed", False)
@@ -385,114 +403,118 @@ def assign_best_existing_role(token: str) -> None:
         ]
 
         if not manageable_roles:
-            print(color("Brak istniejącej rangi, którą bot może nadać.", Colors.YELLOW))
-            pause()
+            print_centered("No existing role can be granted by this bot.", UiColor.YELLOW)
+            wait_for_enter()
             return
 
-        best_role = max(manageable_roles, key=lambda r: int(r.get("position", 0)))
-        role_id = best_role.get("id")
-        role_name = best_role.get("name", "Unknown")
+        best_role = max(manageable_roles, key=lambda role: int(role.get("position", 0)))
+        assign_response = api_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{best_role.get('id')}", token)
 
-        assign_role = discord_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
-        if assign_role.status_code in (200, 204):
-            print(color(f"Sukces! Nadano istniejącą rangę: {role_name}", Colors.GREEN))
+        if assign_response.status_code in (200, 204):
+            print_centered(f"Success: granted role '{best_role.get('name', 'Unknown')}'.", UiColor.GREEN)
         else:
-            print(color(f"Nie udało się nadać rangi (HTTP {assign_role.status_code}).", Colors.RED))
-            print(assign_role.text)
+            print_centered(f"Role assign failed (HTTP {assign_response.status_code}).", UiColor.RED)
+            print(assign_response.text)
     except requests.RequestException as exc:
-        print(color(f"Błąd połączenia: {exc}", Colors.RED))
+        print_centered(f"Network error: {exc}", UiColor.RED)
 
-    pause()
+    wait_for_enter()
 
 
-def copy_link_with_feedback(link: Optional[str], kind: str) -> None:
+def show_link_result_and_copy(link: Optional[str], label: str) -> None:
     if not link:
-        print(color(f"Nie udało się pobrać linku: {kind}", Colors.RED))
-        pause()
+        print_centered(f"Cannot generate: {label}", UiColor.RED)
+        wait_for_enter()
         return
+
     if copy_to_clipboard(link):
-        print(color(f"Skopiowano: {kind}", Colors.GREEN))
+        print_centered(f"Copied: {label}", UiColor.GREEN)
     else:
-        print(color("Nie udało się skopiować do schowka. Link poniżej:", Colors.YELLOW))
+        print_centered("Clipboard copy failed. Link below:", UiColor.YELLOW)
         print(link)
-    pause()
+    wait_for_enter()
 
 
-def token_menu(info: TokenInfo) -> None:
+def token_actions_menu(selected_token: BotTokenStatus) -> None:
     while True:
-        clear_screen()
-        banner()
-        print(color(f"\n  Token #{info.index}: {mask_token(info.token)}", Colors.BLUE))
-        print(color(f"  Bot: {info.bot_name} | ID: {info.bot_id}\n", Colors.GREEN))
+        clear_console()
+        print_banner()
+        print()
+        print_centered(f"Token #{selected_token.index}: {hide_token(selected_token.token)}", UiColor.DARK_GRAY)
+        print_centered(f"Bot: {selected_token.bot_name} | ID: {selected_token.bot_id}", UiColor.LIGHT_GRAY)
+        print()
 
         menu_lines = [
-            "«01» Back                                 «04» Permisje (admin dla użytkownika)",
-            "«02» Copy Server Link                     «05» Daj najlepszą istniejącą rangę",
-            "«03» Copy Bot Invite Link                 «00» Zakończ program",
+            "«01» Back                              «04» Grant admin role",
+            "«02» Copy server invite link           «05» Grant best existing role",
+            "«03» Copy bot invite link              «00» Exit program",
         ]
-        print_box(menu_lines)
+        draw_centered_box(menu_lines)
 
-        choice = input(color("\n  -> ", Colors.CYAN)).strip()
+        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
         if choice in {"1", "01"}:
             return
         if choice in {"0", "00"}:
             raise SystemExit
         if choice in {"2", "02"}:
-            copy_link_with_feedback(build_server_invite_link(info.token), "Link do serwera")
+            show_link_result_and_copy(create_guild_invite_link(selected_token.token), "Server invite link")
         elif choice in {"3", "03"}:
-            copy_link_with_feedback(build_bot_invite_link(info.token), "Link do dodania bota")
+            show_link_result_and_copy(create_bot_invite_link(selected_token.token), "Bot invite link")
         elif choice in {"4", "04"}:
-            grant_admin_role(info.token)
+            grant_admin_role_to_user(selected_token.token)
         elif choice in {"5", "05"}:
-            assign_best_existing_role(info.token)
+            grant_best_existing_role_to_user(selected_token.token)
         else:
-            print(color("Niepoprawny wybór.", Colors.RED))
-            pause()
+            print_centered("Invalid option.", UiColor.RED)
+            wait_for_enter()
 
 
 def main() -> None:
     while True:
-        clear_screen()
-        tokens = read_tokens()
+        clear_console()
 
+        tokens = read_tokens_file()
         if not tokens:
-            banner()
-            print(color(f"\n  Brak tokenów w pliku: {TOKENS_FILE}", Colors.RED))
-            print(color("  Dodaj minimum 1 token (1 linia = 1 token) i uruchom ponownie.", Colors.YELLOW))
+            print_banner()
+            print()
+            print_centered(f"No tokens in file: {TOKENS_FILE}", UiColor.RED)
+            print_centered("Add at least 1 token (1 line = 1 token) and start again.", UiColor.YELLOW)
             return
 
-        token_infos = check_all_tokens(tokens)
-        print_main_header(len(tokens))
+        statuses = validate_all_tokens(tokens)
+        print_banner()
+        print()
+        print_centered(f"Loaded <{len(tokens)}> tokens", UiColor.DARK_GRAY)
+        print()
 
-        token_lines = []
-        for info in token_infos:
-            status = color("DZIAŁA", Colors.GREEN) if info.valid else color(f"NIE DZIAŁA ({info.error})", Colors.RED)
-            token_lines.append(f"«{str(info.index).zfill(2)}» {mask_token(info.token)} -> {status}")
+        lines: List[str] = []
+        for status in statuses:
+            state = color_text("WORKING", UiColor.GREEN) if status.is_valid else color_text(f"INVALID ({status.error})", UiColor.RED)
+            lines.append(f"«{str(status.index).zfill(2)}» {hide_token(status.token)} -> {state}")
+        lines.append("«00» Exit")
+        draw_centered_box(lines)
 
-        token_lines.append("«00» Zakończ")
-        print_box(token_lines)
-
-        choice = input(color("\n  -> ", Colors.CYAN)).strip()
+        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
         if choice in {"0", "00"}:
             return
         if not choice.isdigit():
-            print(color("Wpisz poprawny numer.", Colors.RED))
-            pause()
+            print_centered("Enter a valid number.", UiColor.RED)
+            wait_for_enter()
             continue
 
-        selected_idx = int(choice)
-        selected = next((x for x in token_infos if x.index == selected_idx), None)
+        selected_index = int(choice)
+        selected = next((item for item in statuses if item.index == selected_index), None)
         if not selected:
-            print(color("Nie ma tokenu o takim numerze.", Colors.RED))
-            pause()
+            print_centered("Token number not found.", UiColor.RED)
+            wait_for_enter()
             continue
-        if not selected.valid:
-            print(color("Ten token jest nieprawidłowy, wybierz działający token.", Colors.YELLOW))
-            pause()
+        if not selected.is_valid:
+            print_centered("This token is invalid. Select a working one.", UiColor.YELLOW)
+            wait_for_enter()
             continue
 
         try:
-            token_menu(selected)
+            token_actions_menu(selected)
         except SystemExit:
             return
 

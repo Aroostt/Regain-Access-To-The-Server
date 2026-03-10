@@ -1,40 +1,40 @@
 # Regain-Access-To-The-Server
 
-Prosty, kolorowy tool do uruchamiania w `cmd`, który:
+A centered, white/gray styled CMD CLI tool that:
 
-- czyta tokeny botów Discord z pliku `tokens.txt`,
-- pokazuje, które tokeny działają,
-- pozwala wybrać token po numerze,
-- daje menu akcji dla wybranego tokenu w stylu ASCII box.
+- reads Discord bot tokens from `tokens.txt`,
+- checks which tokens are valid,
+- lets you choose a token by number,
+- shows a clean boxed actions menu.
 
-## Wymagania
+## Requirements
 
 - Python 3.10+
-- biblioteka `requests`
+- `requests`
 
-Instalacja:
+Install:
 
 ```bash
 pip install requests
 ```
 
-## Uruchomienie
+## Run
 
-1. Wklej token(y) do `tokens.txt` (1 token na linię).
-2. Odpal:
+1. Put token(s) into `tokens.txt` (1 token per line).
+2. Start:
 
 ```bash
 python discord_tool.py
 ```
 
-## Funkcje
+## Features
 
-Po wybraniu poprawnego tokenu:
+After selecting a valid token:
 
-1. **Back** – powrót do listy tokenów.
-2. **Copy Server Link** – tworzy i kopiuje link zaproszenia do serwera, na którym jest bot (najpierw wybierasz serwer).
-3. **Copy Bot Invite Link** – tworzy i kopiuje link do dodania bota na serwer.
-4. **Permisje** – tworzy rolę administracyjną (pełne permisje), próbuje przesunąć ją na najwyższą możliwą pozycję i przypisuje ją użytkownikowi po podaniu jego ID.
-5. **Daj najlepszą istniejącą rangę** – nadaje najwyższą istniejącą rangę, którą bot realnie może nadać (zgodnie z hierarchią Discord).
+1. **Back** – return to token list.
+2. **Copy server invite link** – creates and copies a server invite from a selected guild.
+3. **Copy bot invite link** – creates and copies bot OAuth invite link.
+4. **Grant admin role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
+5. **Grant best existing role** – assigns the highest existing role the bot can legally grant in hierarchy.
 
-> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze, żeby tworzyć zaproszenia, role i przypisywać role użytkownikom.
+> Note: The bot must have proper permissions on the guild (create invites, manage roles, assign roles).
