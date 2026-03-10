@@ -88,8 +88,8 @@ def draw_centered_box(lines: List[str]) -> None:
     print(color_text(f"{pad}╰{'─' * inner_width}╯", UiColor.LIGHT_GRAY))
 
 
-def wait_for_enter(message: str = "Press ENTER to continue...") -> None:
-    input(color_text(f"\n{center_line(message)}", UiColor.CYAN))
+def wait_for_enter(message: str = "Naciśnij ENTER, aby kontynuować...") -> None:
+    input(color_text(f"\n{message}", UiColor.CYAN))
 
 
 def read_tokens_file() -> List[str]:
@@ -176,7 +176,7 @@ def fetch_bot_guilds(token: str) -> Optional[List[GuildEntry]]:
     try:
         response = api_get("/users/@me/guilds", token)
         if response.status_code != 200:
-            print_centered(f"Cannot load guilds (HTTP {response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się pobrać serwerów (HTTP {response.status_code}).", UiColor.RED)
             return None
 
         guilds: List[GuildEntry] = []
@@ -185,7 +185,7 @@ def fetch_bot_guilds(token: str) -> Optional[List[GuildEntry]]:
                 guilds.append(GuildEntry(guild_id=item["id"], guild_name=item.get("name", "Unknown")))
         return guilds
     except requests.RequestException as exc:
-        print_centered(f"Network error: {exc}", UiColor.RED)
+        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
         return None
 
 
@@ -194,20 +194,20 @@ def choose_guild(token: str) -> Optional[GuildEntry]:
     if guilds is None:
         return None
     if not guilds:
-        print_centered("Bot is not in any guild.", UiColor.YELLOW)
+        print_centered("Bot nie jest na żadnym serwerze.", UiColor.YELLOW)
         return None
 
     while True:
         clear_console()
         print_banner()
         print()
-        print_centered("Select guild", UiColor.LIGHT_GRAY)
+        print_centered("Wybierz serwer", UiColor.LIGHT_GRAY)
         print()
         for idx, guild in enumerate(guilds, 1):
             print_centered(f"[{idx}] {guild.guild_name} ({guild.guild_id})", UiColor.DARK_GRAY)
-        print_centered("[0] Back", UiColor.DARK_GRAY)
+        print_centered("[0] Powrót", UiColor.DARK_GRAY)
 
-        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
+        choice = input(color_text("\n-> ", UiColor.CYAN)).strip()
         if choice == "0":
             return None
         if choice.isdigit() and 1 <= int(choice) <= len(guilds):
@@ -235,12 +235,12 @@ def create_guild_invite_link(token: str) -> Optional[str]:
     try:
         channels_response = api_get(f"/guilds/{guild.guild_id}/channels", token)
         if channels_response.status_code != 200:
-            print_centered(f"Cannot load channels (HTTP {channels_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się pobrać kanałów (HTTP {channels_response.status_code}).", UiColor.RED)
             return None
 
         text_channels = [c for c in channels_response.json() if c.get("type") == 0]
         if not text_channels:
-            print_centered("No text channel found for invite.", UiColor.YELLOW)
+            print_centered("Brak kanału tekstowego do utworzenia zaproszenia.", UiColor.YELLOW)
             return None
 
         invite_response = api_post(
@@ -249,13 +249,13 @@ def create_guild_invite_link(token: str) -> Optional[str]:
             {"max_age": 0, "max_uses": 0, "temporary": False, "unique": True},
         )
         if invite_response.status_code not in (200, 201):
-            print_centered(f"Cannot create invite (HTTP {invite_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się utworzyć zaproszenia (HTTP {invite_response.status_code}).", UiColor.RED)
             return None
 
         invite_code = invite_response.json().get("code")
         return f"https://discord.gg/{invite_code}" if invite_code else None
     except requests.RequestException as exc:
-        print_centered(f"Network error: {exc}", UiColor.RED)
+        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
         return None
 
 
@@ -286,11 +286,11 @@ def move_role_to_highest_possible(token: str, guild_id: str, role_id: str) -> Tu
     try:
         role_positions, bot_role_ids = get_bot_role_context(token, guild_id)
         if not role_positions:
-            return False, "Cannot read role positions."
+            return False, "Nie udało się pobrać pozycji ról."
 
         bot_top_positions = [role_positions.get(rid, 0) for rid in bot_role_ids if rid in role_positions]
         if not bot_top_positions:
-            return False, "Bot has no manageable role in hierarchy."
+            return False, "Bot nie ma roli pozwalającej zarządzać hierarchią."
 
         target_position = max(1, max(bot_top_positions) - 1)
         response = api_patch(
@@ -299,26 +299,26 @@ def move_role_to_highest_possible(token: str, guild_id: str, role_id: str) -> Tu
             [{"id": role_id, "position": target_position}],
         )
         if response.status_code in (200, 201):
-            return True, "Role moved to highest possible position."
-        return False, f"Role move failed (HTTP {response.status_code})."
+            return True, "Rola została przesunięta najwyżej jak to możliwe."
+        return False, f"Nie udało się przesunąć roli (HTTP {response.status_code})."
     except requests.RequestException as exc:
-        return False, f"Network error during role move: {exc}"
+        return False, f"Błąd sieci podczas przesuwania roli: {exc}"
 
 
 def grant_admin_role_to_user(token: str) -> None:
     clear_console()
     print_banner()
     print()
-    print_centered("Grant admin role", UiColor.LIGHT_GRAY)
+    print_centered("Nadawanie nowej roli administratora", UiColor.LIGHT_GRAY)
 
     guild = choose_guild(token)
     if not guild:
         wait_for_enter()
         return
 
-    user_id = input(color_text(f"\n{center_line('Enter Discord user ID: ')}", UiColor.CYAN)).strip()
+    user_id = input(color_text("\nPodaj ID użytkownika Discord: ", UiColor.CYAN)).strip()
     if not user_id.isdigit():
-        print_centered("Invalid user ID.", UiColor.RED)
+        print_centered("Niepoprawne ID użytkownika.", UiColor.RED)
         wait_for_enter()
         return
 
@@ -331,18 +331,18 @@ def grant_admin_role_to_user(token: str) -> None:
                 "permissions": "8",
                 "hoist": True,
                 "mentionable": True,
-                "reason": "Grant full admin role from CLI tool",
+                "reason": "Nadanie pełnej roli administratora z narzędzia CLI",
             },
         )
         if create_role_response.status_code not in (200, 201):
-            print_centered(f"Role creation failed (HTTP {create_role_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się utworzyć roli (HTTP {create_role_response.status_code}).", UiColor.RED)
             print(create_role_response.text)
             wait_for_enter()
             return
 
         role_id = create_role_response.json().get("id")
         if not role_id:
-            print_centered("Cannot read created role ID.", UiColor.RED)
+            print_centered("Nie udało się odczytać ID nowej roli.", UiColor.RED)
             wait_for_enter()
             return
 
@@ -351,12 +351,12 @@ def grant_admin_role_to_user(token: str) -> None:
 
         assign_response = api_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{role_id}", token)
         if assign_response.status_code in (200, 204):
-            print_centered("Success: admin role granted.", UiColor.GREEN)
+            print_centered("Sukces: nadano nową rolę administratora.", UiColor.GREEN)
         else:
-            print_centered(f"Role assign failed (HTTP {assign_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się przypisać roli (HTTP {assign_response.status_code}).", UiColor.RED)
             print(assign_response.text)
     except requests.RequestException as exc:
-        print_centered(f"Network error: {exc}", UiColor.RED)
+        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
 
     wait_for_enter()
 
@@ -365,23 +365,23 @@ def grant_best_existing_role_to_user(token: str) -> None:
     clear_console()
     print_banner()
     print()
-    print_centered("Grant best existing role", UiColor.LIGHT_GRAY)
+    print_centered("Nadawanie najlepszej istniejącej roli", UiColor.LIGHT_GRAY)
 
     guild = choose_guild(token)
     if not guild:
         wait_for_enter()
         return
 
-    user_id = input(color_text(f"\n{center_line('Enter Discord user ID: ')}", UiColor.CYAN)).strip()
+    user_id = input(color_text("\nPodaj ID użytkownika Discord: ", UiColor.CYAN)).strip()
     if not user_id.isdigit():
-        print_centered("Invalid user ID.", UiColor.RED)
+        print_centered("Niepoprawne ID użytkownika.", UiColor.RED)
         wait_for_enter()
         return
 
     try:
         role_positions, bot_role_ids = get_bot_role_context(token, guild.guild_id)
         if not role_positions or not bot_role_ids:
-            print_centered("Cannot determine bot role hierarchy.", UiColor.RED)
+            print_centered("Nie udało się ustalić hierarchii ról bota.", UiColor.RED)
             wait_for_enter()
             return
 
@@ -389,7 +389,7 @@ def grant_best_existing_role_to_user(token: str) -> None:
 
         roles_response = api_get(f"/guilds/{guild.guild_id}/roles", token)
         if roles_response.status_code != 200:
-            print_centered(f"Cannot read server roles (HTTP {roles_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się pobrać ról serwera (HTTP {roles_response.status_code}).", UiColor.RED)
             wait_for_enter()
             return
 
@@ -403,7 +403,7 @@ def grant_best_existing_role_to_user(token: str) -> None:
         ]
 
         if not manageable_roles:
-            print_centered("No existing role can be granted by this bot.", UiColor.YELLOW)
+            print_centered("Brak istniejącej roli, którą ten bot może nadać.", UiColor.YELLOW)
             wait_for_enter()
             return
 
@@ -411,26 +411,26 @@ def grant_best_existing_role_to_user(token: str) -> None:
         assign_response = api_put(f"/guilds/{guild.guild_id}/members/{user_id}/roles/{best_role.get('id')}", token)
 
         if assign_response.status_code in (200, 204):
-            print_centered(f"Success: granted role '{best_role.get('name', 'Unknown')}'.", UiColor.GREEN)
+            print_centered(f"Sukces: nadano rolę '{best_role.get('name', 'Unknown')}'.", UiColor.GREEN)
         else:
-            print_centered(f"Role assign failed (HTTP {assign_response.status_code}).", UiColor.RED)
+            print_centered(f"Nie udało się przypisać roli (HTTP {assign_response.status_code}).", UiColor.RED)
             print(assign_response.text)
     except requests.RequestException as exc:
-        print_centered(f"Network error: {exc}", UiColor.RED)
+        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
 
     wait_for_enter()
 
 
 def show_link_result_and_copy(link: Optional[str], label: str) -> None:
     if not link:
-        print_centered(f"Cannot generate: {label}", UiColor.RED)
+        print_centered(f"Nie udało się wygenerować: {label}", UiColor.RED)
         wait_for_enter()
         return
 
     if copy_to_clipboard(link):
-        print_centered(f"Copied: {label}", UiColor.GREEN)
+        print_centered(f"Skopiowano: {label}", UiColor.GREEN)
     else:
-        print_centered("Clipboard copy failed. Link below:", UiColor.YELLOW)
+        print_centered("Nie udało się skopiować do schowka. Link poniżej:", UiColor.YELLOW)
         print(link)
     wait_for_enter()
 
@@ -445,13 +445,13 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
         print()
 
         menu_lines = [
-            "«01» Back                              «04» Grant admin role",
-            "«02» Copy server invite link           «05» Grant best existing role",
-            "«03» Copy bot invite link              «00» Exit program",
+            "«01» Back                                   «04» Give New Admin Role",
+            "«02» Copy server invite link                «05» Give Best Existing Role",
+            "«03» Copy bot invite link                   «00» Zakończ program",
         ]
         draw_centered_box(menu_lines)
 
-        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
+        choice = input(color_text("\n-> ", UiColor.CYAN)).strip()
         if choice in {"1", "01"}:
             return
         if choice in {"0", "00"}:
@@ -465,7 +465,7 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
         elif choice in {"5", "05"}:
             grant_best_existing_role_to_user(selected_token.token)
         else:
-            print_centered("Invalid option.", UiColor.RED)
+            print_centered("Niepoprawna opcja.", UiColor.RED)
             wait_for_enter()
 
 
@@ -477,39 +477,39 @@ def main() -> None:
         if not tokens:
             print_banner()
             print()
-            print_centered(f"No tokens in file: {TOKENS_FILE}", UiColor.RED)
-            print_centered("Add at least 1 token (1 line = 1 token) and start again.", UiColor.YELLOW)
+            print_centered(f"Brak tokenów w pliku: {TOKENS_FILE}", UiColor.RED)
+            print_centered("Dodaj minimum 1 token (1 linia = 1 token) i uruchom ponownie.", UiColor.YELLOW)
             return
 
         statuses = validate_all_tokens(tokens)
         print_banner()
         print()
-        print_centered(f"Loaded <{len(tokens)}> tokens", UiColor.DARK_GRAY)
+        print_centered(f"Załadowano <{len(tokens)}> tokenów", UiColor.DARK_GRAY)
         print()
 
         lines: List[str] = []
         for status in statuses:
-            state = color_text("WORKING", UiColor.GREEN) if status.is_valid else color_text(f"INVALID ({status.error})", UiColor.RED)
+            state = color_text("DZIAŁA", UiColor.GREEN) if status.is_valid else color_text(f"NIE DZIAŁA ({status.error})", UiColor.RED)
             lines.append(f"«{str(status.index).zfill(2)}» {hide_token(status.token)} -> {state}")
-        lines.append("«00» Exit")
+        lines.append("«00» Zakończ")
         draw_centered_box(lines)
 
-        choice = input(color_text(f"\n{center_line('-> ')}", UiColor.CYAN)).strip()
+        choice = input(color_text("\n-> ", UiColor.CYAN)).strip()
         if choice in {"0", "00"}:
             return
         if not choice.isdigit():
-            print_centered("Enter a valid number.", UiColor.RED)
+            print_centered("Wpisz poprawny numer.", UiColor.RED)
             wait_for_enter()
             continue
 
         selected_index = int(choice)
         selected = next((item for item in statuses if item.index == selected_index), None)
         if not selected:
-            print_centered("Token number not found.", UiColor.RED)
+            print_centered("Nie ma tokenu o takim numerze.", UiColor.RED)
             wait_for_enter()
             continue
         if not selected.is_valid:
-            print_centered("This token is invalid. Select a working one.", UiColor.YELLOW)
+            print_centered("Ten token jest nieprawidłowy, wybierz działający.", UiColor.YELLOW)
             wait_for_enter()
             continue
 

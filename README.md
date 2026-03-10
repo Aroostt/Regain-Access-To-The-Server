@@ -1,40 +1,40 @@
 # Regain-Access-To-The-Server
 
-A centered, white/gray styled CMD CLI tool that:
+Wyśrodkowany tool CLI do CMD w stylu biało/szarym, który:
 
-- reads Discord bot tokens from `tokens.txt`,
-- checks which tokens are valid,
-- lets you choose a token by number,
-- shows a clean boxed actions menu.
+- czyta tokeny botów Discord z `tokens.txt`,
+- sprawdza, które tokeny działają,
+- pozwala wybrać token po numerze,
+- pokazuje czytelne menu w ramce.
 
-## Requirements
+## Wymagania
 
 - Python 3.10+
 - `requests`
 
-Install:
+Instalacja:
 
 ```bash
 pip install requests
 ```
 
-## Run
+## Uruchomienie
 
-1. Put token(s) into `tokens.txt` (1 token per line).
-2. Start:
+1. Wklej token(y) do `tokens.txt` (1 token na linię).
+2. Uruchom:
 
 ```bash
 python discord_tool.py
 ```
 
-## Features
+## Funkcje
 
-After selecting a valid token:
+Po wybraniu poprawnego tokenu:
 
 1. **Back** – return to token list.
 2. **Copy server invite link** – creates and copies a server invite from a selected guild.
 3. **Copy bot invite link** – creates and copies bot OAuth invite link.
-4. **Grant admin role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
-5. **Grant best existing role** – assigns the highest existing role the bot can legally grant in hierarchy.
+4. **Give New Admin Role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
+5. **Give Best Existing Role** – assigns the highest existing role the bot can legally grant in hierarchy.
 
-> Note: The bot must have proper permissions on the guild (create invites, manage roles, assign roles).
+> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami, przypisywanie ról).
