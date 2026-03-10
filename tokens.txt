@@ -1,0 +1,3 @@
+# Wklej tokeny botów Discord (1 token w jednej linii)
+# przykład:
+# MTAx...abc
