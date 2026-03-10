@@ -27,23 +27,16 @@ pip install requests
 python discord_tool.py
 ```
 
-## Struktura menu
+## Menu funkcji (bez przechodzenia do kategorii)
 
-Po wybraniu poprawnego tokenu pojawia się menu kategorii:
-
-- `01` **Back**
-- `00` **Zakończ program**
-- `02` **Bot Information**
-- `03` **Backup**
-
-W każdej kategorii na górze zawsze są:
+Po wybraniu poprawnego tokenu wszystkie komendy są od razu widoczne na jednym ekranie, pod nagłówkami kategorii.
+Na górze zawsze są:
 
 - `01` **Back**
 - `00` **Zakończ program**
 
 ### Bot Information
 
-1. **Back** – return to token list.
 2. **Copy server invite link** – creates and copies a server invite from a selected guild.
 3. **Copy bot invite link** – creates and copies bot OAuth invite link.
 4. **Give New Admin Role** – creates an admin role, tries to move it as high as possible, assigns it to user ID.
@@ -51,7 +44,6 @@ W każdej kategorii na górze zawsze są:
 
 ### Backup
 
-- **Backup struktury serwera** – zapisuje role i kanały serwera do pliku JSON.
-- **Backup ról użytkownika** – zapisuje aktualne role wskazanego użytkownika do pliku JSON.
+6. **Full backup (roles/channels/emojis/stickers/etc)** – zapisuje pełny backup danych serwera do JSON (m.in. role, kanały, emotki, stickery, eventy oraz dane serwera).
 
-> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami, przypisywanie ról).
+> Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami, przypisywanie ról, odczyt danych serwera).

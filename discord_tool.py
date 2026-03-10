@@ -436,95 +436,62 @@ def show_link_result_and_copy(link: Optional[str], label: str) -> None:
     wait_for_enter()
 
 
-def backup_guild_structure(token: str) -> None:
+def backup_full_server_data(token: str) -> None:
     clear_console()
     print_banner()
     print()
-    print_centered("Backup struktury serwera", UiColor.LIGHT_GRAY)
+    print_centered("Backup pełnych danych serwera", UiColor.LIGHT_GRAY)
 
     guild = choose_guild(token)
     if not guild:
         wait_for_enter()
         return
 
-    try:
-        roles_response = api_get(f"/guilds/{guild.guild_id}/roles", token)
-        channels_response = api_get(f"/guilds/{guild.guild_id}/channels", token)
+    def fetch(path: str) -> Dict[str, object]:
+        try:
+            response = api_get(path, token)
+            if response.status_code == 200:
+                return {"ok": True, "status": 200, "data": response.json()}
+            return {"ok": False, "status": response.status_code, "error": response.text}
+        except requests.RequestException as exc:
+            return {"ok": False, "status": None, "error": str(exc)}
 
-        if roles_response.status_code != 200 or channels_response.status_code != 200:
-            print_centered("Nie udało się pobrać danych do backupu.", UiColor.RED)
-            wait_for_enter()
-            return
+    try:
+        guild_info = fetch(f"/guilds/{guild.guild_id}")
+        roles = fetch(f"/guilds/{guild.guild_id}/roles")
+        channels = fetch(f"/guilds/{guild.guild_id}/channels")
+        emojis = fetch(f"/guilds/{guild.guild_id}/emojis")
+        stickers = fetch(f"/guilds/{guild.guild_id}/stickers")
+        scheduled_events = fetch(f"/guilds/{guild.guild_id}/scheduled-events")
 
         os.makedirs("backups", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join("backups", f"guild_backup_{guild.guild_id}_{timestamp}.json")
+        backup_path = os.path.join("backups", f"full_backup_{guild.guild_id}_{timestamp}.json")
 
         payload = {
             "guild_id": guild.guild_id,
             "guild_name": guild.guild_name,
             "created_at": timestamp,
-            "roles": roles_response.json(),
-            "channels": channels_response.json(),
+            "backup_scope": ["guild", "roles", "channels", "emojis", "stickers", "scheduled_events"],
+            "guild": guild_info,
+            "roles": roles,
+            "channels": channels,
+            "emojis": emojis,
+            "stickers": stickers,
+            "scheduled_events": scheduled_events,
         }
 
         with open(backup_path, "w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
 
-        print_centered(f"Sukces: zapisano backup do {backup_path}", UiColor.GREEN)
-    except requests.RequestException as exc:
-        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
+        print_centered(f"Sukces: zapisano pełny backup do {backup_path}", UiColor.GREEN)
+    except Exception as exc:
+        print_centered(f"Błąd podczas zapisywania backupu: {exc}", UiColor.RED)
 
     wait_for_enter()
 
 
-def backup_member_roles(token: str) -> None:
-    clear_console()
-    print_banner()
-    print()
-    print_centered("Backup ról użytkownika", UiColor.LIGHT_GRAY)
-
-    guild = choose_guild(token)
-    if not guild:
-        wait_for_enter()
-        return
-
-    user_id = input(color_text("\nPodaj ID użytkownika Discord: ", UiColor.CYAN)).strip()
-    if not user_id.isdigit():
-        print_centered("Niepoprawne ID użytkownika.", UiColor.RED)
-        wait_for_enter()
-        return
-
-    try:
-        member_response = api_get(f"/guilds/{guild.guild_id}/members/{user_id}", token)
-        if member_response.status_code != 200:
-            print_centered(f"Nie udało się pobrać danych użytkownika (HTTP {member_response.status_code}).", UiColor.RED)
-            wait_for_enter()
-            return
-
-        os.makedirs("backups", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join("backups", f"member_roles_{guild.guild_id}_{user_id}_{timestamp}.json")
-
-        payload = {
-            "guild_id": guild.guild_id,
-            "guild_name": guild.guild_name,
-            "user_id": user_id,
-            "roles": member_response.json().get("roles", []),
-            "created_at": timestamp,
-        }
-
-        with open(backup_path, "w", encoding="utf-8") as file:
-            json.dump(payload, file, ensure_ascii=False, indent=2)
-
-        print_centered(f"Sukces: zapisano backup do {backup_path}", UiColor.GREEN)
-    except requests.RequestException as exc:
-        print_centered(f"Błąd sieci: {exc}", UiColor.RED)
-
-    wait_for_enter()
-
-
-def bot_information_menu(selected_token: BotTokenStatus) -> None:
+def token_actions_menu(selected_token: BotTokenStatus) -> None:
     while True:
         clear_console()
         print_banner()
@@ -537,10 +504,14 @@ def bot_information_menu(selected_token: BotTokenStatus) -> None:
             "«01» Back",
             "«00» Zakończ program",
             "────────────────────────────────────────────────────────",
+            "[ Bot Information ]",
             "«02» Copy server invite link",
             "«03» Copy bot invite link",
             "«04» Give New Admin Role",
             "«05» Give Best Existing Role",
+            "────────────────────────────────────────────────────────",
+            "[ Backup ]",
+            "«06» Full backup (roles/channels/emojis/stickers/etc)",
         ]
         draw_centered_box(menu_lines)
 
@@ -557,70 +528,8 @@ def bot_information_menu(selected_token: BotTokenStatus) -> None:
             grant_admin_role_to_user(selected_token.token)
         elif choice in {"5", "05"}:
             grant_best_existing_role_to_user(selected_token.token)
-        else:
-            print_centered("Niepoprawna opcja.", UiColor.RED)
-            wait_for_enter()
-
-
-def backup_menu(selected_token: BotTokenStatus) -> None:
-    while True:
-        clear_console()
-        print_banner()
-        print()
-        print_centered(f"Token #{selected_token.index}: {hide_token(selected_token.token)}", UiColor.DARK_GRAY)
-        print_centered("Backup", UiColor.LIGHT_GRAY)
-        print()
-
-        menu_lines = [
-            "«01» Back",
-            "«00» Zakończ program",
-            "────────────────────────────────────────────────────────",
-            "«02» Backup struktury serwera (role + kanały)",
-            "«03» Backup ról użytkownika",
-        ]
-        draw_centered_box(menu_lines)
-
-        choice = input(color_text("\n-> ", UiColor.CYAN)).strip()
-        if choice in {"1", "01"}:
-            return
-        if choice in {"0", "00"}:
-            raise SystemExit
-        if choice in {"2", "02"}:
-            backup_guild_structure(selected_token.token)
-        elif choice in {"3", "03"}:
-            backup_member_roles(selected_token.token)
-        else:
-            print_centered("Niepoprawna opcja.", UiColor.RED)
-            wait_for_enter()
-
-
-def token_actions_menu(selected_token: BotTokenStatus) -> None:
-    while True:
-        clear_console()
-        print_banner()
-        print()
-        print_centered(f"Token #{selected_token.index}: {hide_token(selected_token.token)}", UiColor.DARK_GRAY)
-        print_centered(f"Bot: {selected_token.bot_name} | ID: {selected_token.bot_id}", UiColor.LIGHT_GRAY)
-        print()
-
-        menu_lines = [
-            "«01» Back",
-            "«00» Zakończ program",
-            "────────────────────────────────────────────────────────",
-            "«02» Bot Information",
-            "«03» Backup",
-        ]
-        draw_centered_box(menu_lines)
-
-        choice = input(color_text("\n-> ", UiColor.CYAN)).strip()
-        if choice in {"1", "01"}:
-            return
-        if choice in {"0", "00"}:
-            raise SystemExit
-        if choice in {"2", "02"}:
-            bot_information_menu(selected_token)
-        elif choice in {"3", "03"}:
-            backup_menu(selected_token)
+        elif choice in {"6", "06"}:
+            backup_full_server_data(selected_token.token)
         else:
             print_centered("Niepoprawna opcja.", UiColor.RED)
             wait_for_enter()
