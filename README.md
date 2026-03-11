@@ -48,7 +48,7 @@ Na górze zawsze są:
 
 7. **Backup settings** – osobna konfiguracja backupu (limit wiadomości na kanał `1-1000`, czy zapisywać wiadomości, filtr ról).
 8. **Full backup** – zapisuje dane serwera do JSON (role/kanały/emotki/stickery/eventy + wiadomości wg ustawień).
-9. **Restore backup to another server** – przywraca backup na wybrany inny serwer oraz opcjonalnie odtwarza wiadomości przez webhooki.
+9. **Restore backup to another server** – przywraca backup na wybrany inny serwer, opcjonalnie najpierw czyści aktualny stan serwera (kanały/role/emotki/stickery/eventy), a następnie opcjonalnie odtwarza wiadomości przez webhooki.
 10. **Show backup information** – pokazuje informacje o backupie (data, serwer, owner ID, liczby elementów, limit i filtr ról).
 
 > Uwaga: bot musi mieć odpowiednie uprawnienia na serwerze (tworzenie zaproszeń, zarządzanie rolami/kanałami/webhookami, przypisywanie ról, odczyt danych serwera).

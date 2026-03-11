@@ -650,6 +650,86 @@ def show_backup_info() -> None:
     wait_for_enter()
 
 
+
+
+def wipe_current_guild_state(token: str, guild_id: str) -> Dict[str, int]:
+    deleted = {"channels": 0, "roles": 0, "emojis": 0, "stickers": 0, "events": 0}
+
+    try:
+        channels_res = api_get(f"/guilds/{guild_id}/channels", token)
+        if channels_res.status_code == 200:
+            channels = channels_res.json()
+            for idx, channel in enumerate(channels, 1):
+                channel_id = channel.get("id")
+                if not channel_id:
+                    continue
+                api_delete(f"/channels/{channel_id}", token)
+                deleted["channels"] += 1
+                print_inline_status(f"Czyszczenie kanałów: {idx}/{len(channels)}")
+            clear_inline_status()
+    except requests.RequestException:
+        clear_inline_status()
+
+    try:
+        events_res = api_get(f"/guilds/{guild_id}/scheduled-events", token)
+        if events_res.status_code == 200:
+            events = events_res.json()
+            for idx, event in enumerate(events, 1):
+                event_id = event.get("id")
+                if not event_id:
+                    continue
+                api_delete(f"/guilds/{guild_id}/scheduled-events/{event_id}", token)
+                deleted["events"] += 1
+                print_inline_status(f"Czyszczenie eventów: {idx}/{len(events)}")
+            clear_inline_status()
+    except requests.RequestException:
+        clear_inline_status()
+
+    try:
+        emojis_res = api_get(f"/guilds/{guild_id}/emojis", token)
+        if emojis_res.status_code == 200:
+            emojis = emojis_res.json()
+            for idx, emoji in enumerate(emojis, 1):
+                emoji_id = emoji.get("id")
+                if not emoji_id:
+                    continue
+                api_delete(f"/guilds/{guild_id}/emojis/{emoji_id}", token)
+                deleted["emojis"] += 1
+                print_inline_status(f"Czyszczenie emotek: {idx}/{len(emojis)}")
+            clear_inline_status()
+    except requests.RequestException:
+        clear_inline_status()
+
+    try:
+        stickers_res = api_get(f"/guilds/{guild_id}/stickers", token)
+        if stickers_res.status_code == 200:
+            stickers = stickers_res.json()
+            for idx, sticker in enumerate(stickers, 1):
+                sticker_id = sticker.get("id")
+                if not sticker_id:
+                    continue
+                api_delete(f"/guilds/{guild_id}/stickers/{sticker_id}", token)
+                deleted["stickers"] += 1
+                print_inline_status(f"Czyszczenie stickerów: {idx}/{len(stickers)}")
+            clear_inline_status()
+    except requests.RequestException:
+        clear_inline_status()
+
+    try:
+        roles_res = api_get(f"/guilds/{guild_id}/roles", token)
+        if roles_res.status_code == 200:
+            roles = [r for r in roles_res.json() if r.get("name") != "@everyone" and not r.get("managed", False) and r.get("id")]
+            roles.sort(key=lambda r: int(r.get("position", 0)))
+            for idx, role in enumerate(roles, 1):
+                api_delete(f"/guilds/{guild_id}/roles/{role.get('id')}", token)
+                deleted["roles"] += 1
+                print_inline_status(f"Czyszczenie ról: {idx}/{len(roles)}")
+            clear_inline_status()
+    except requests.RequestException:
+        clear_inline_status()
+
+    return deleted
+
 def restore_backup_to_other_guild(token: str) -> None:
     backup_path = choose_backup_file()
     if not backup_path:
@@ -658,7 +738,8 @@ def restore_backup_to_other_guild(token: str) -> None:
     if not target:
         wait_for_enter(); return
 
-    copy_messages = input(color_text("\nPrzywrócić także zapisane wiadomości przez webhooki? [t/N]: ", UiColor.CYAN)).strip().lower() == 't'
+    wipe_current = ask_yes_no("Usunąć aktualny stan serwera przed odtworzeniem?", default=False)
+    copy_messages = ask_yes_no("Przywrócić także zapisane wiadomości przez webhooki?", default=False)
 
     try:
         with open(backup_path, 'r', encoding='utf-8') as f:
@@ -667,6 +748,13 @@ def restore_backup_to_other_guild(token: str) -> None:
         roles_data = backup.get("roles", {}).get("data", []) if isinstance(backup.get("roles"), dict) else []
         channels_data = backup.get("channels", {}).get("data", []) if isinstance(backup.get("channels"), dict) else []
         messages_data = backup.get("messages", {}) if isinstance(backup.get("messages"), dict) else {}
+
+        if wipe_current:
+            deleted = wipe_current_guild_state(token, target.guild_id)
+            print_centered(
+                f"Wyczyszczono serwer. Kanały: {deleted['channels']}, Role: {deleted['roles']}, Emotki: {deleted['emojis']}, Stickery: {deleted['stickers']}, Eventy: {deleted['events']}",
+                UiColor.YELLOW,
+            )
 
         created_roles = 0
         created_channels = 0
