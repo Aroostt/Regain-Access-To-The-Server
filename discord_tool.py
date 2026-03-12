@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
@@ -11,6 +12,8 @@ import requests
 
 TOKENS_FILE = "tokens.txt"
 BACKUPS_DIR = "backups"
+SETTINGS_FILE = "backup_settings.json"
+LOGS_DIR = "logs"
 API_BASE = "https://discord.com/api/v10"
 REQUEST_TIMEOUT = 12
 
@@ -52,10 +55,16 @@ class BackupSettings:
     copy_messages: bool = False
     role_filter_ids: Optional[Set[str]] = None
     role_filter_names: List[str] = None
+    included_scopes: Set[str] = None
+    cleanup_scopes: Set[str] = None
 
     def __post_init__(self) -> None:
         if self.role_filter_names is None:
             self.role_filter_names = []
+        if self.included_scopes is None:
+            self.included_scopes = {"guild", "roles", "channels", "emojis", "stickers", "scheduled_events", "messages"}
+        if self.cleanup_scopes is None:
+            self.cleanup_scopes = {"channels", "roles", "emojis", "stickers", "events"}
 
 
 BACKUP_SETTINGS_BY_GUILD: Dict[str, BackupSettings] = {}
@@ -175,6 +184,79 @@ def fetch_json_data(token: str, path: str, params: Optional[dict] = None) -> Dic
         return {"ok": False, "status": response.status_code, "error": response.text}
     except requests.RequestException as exc:
         return {"ok": False, "status": None, "error": str(exc)}
+
+
+def ensure_runtime_dirs() -> None:
+    os.makedirs(BACKUPS_DIR, exist_ok=True)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+
+
+def log_event(action: str, message: str) -> None:
+    ensure_runtime_dirs()
+    date_part = datetime.now().strftime("%Y%m%d")
+    log_path = os.path.join(LOGS_DIR, f"tool_{date_part}.log")
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_file.write(f"[{ts}] [{action}] {message}\n")
+
+
+def save_backup_settings_to_disk() -> None:
+    payload: Dict[str, dict] = {}
+    for guild_id, settings in BACKUP_SETTINGS_BY_GUILD.items():
+        payload[guild_id] = {
+            "messages_per_channel": settings.messages_per_channel,
+            "copy_messages": settings.copy_messages,
+            "role_filter_ids": sorted(list(settings.role_filter_ids)) if settings.role_filter_ids else None,
+            "role_filter_names": settings.role_filter_names,
+            "included_scopes": sorted(list(settings.included_scopes)),
+            "cleanup_scopes": sorted(list(settings.cleanup_scopes)),
+        }
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def load_backup_settings_from_disk() -> None:
+    if not os.path.exists(SETTINGS_FILE):
+        return
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        if not isinstance(data, dict):
+            return
+        for guild_id, item in data.items():
+            if not isinstance(item, dict):
+                continue
+            BACKUP_SETTINGS_BY_GUILD[guild_id] = BackupSettings(
+                messages_per_channel=int(item.get("messages_per_channel", 100)),
+                copy_messages=bool(item.get("copy_messages", False)),
+                role_filter_ids=set(item.get("role_filter_ids", [])) if isinstance(item.get("role_filter_ids"), list) else None,
+                role_filter_names=item.get("role_filter_names", []) if isinstance(item.get("role_filter_names"), list) else [],
+                included_scopes=set(item.get("included_scopes", [])) if isinstance(item.get("included_scopes"), list) and item.get("included_scopes") else None,
+                cleanup_scopes=set(item.get("cleanup_scopes", [])) if isinstance(item.get("cleanup_scopes"), list) and item.get("cleanup_scopes") else None,
+            )
+    except Exception:
+        return
+
+
+def parse_disable_numbers(input_raw: str, labels: List[str]) -> Set[int]:
+    if not input_raw.strip():
+        return set()
+    disabled: Set[int] = set()
+    for part in input_raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part)
+            if 1 <= idx <= len(labels):
+                disabled.add(idx)
+    return disabled
+
+
+def sort_channels_in_backup_order(channels_data: List[dict]) -> List[dict]:
+    categories = [c for c in channels_data if c.get("type") == 4]
+    non_categories = [c for c in channels_data if c.get("type") != 4]
+    categories.sort(key=lambda c: int(c.get("position", 0)))
+    non_categories.sort(key=lambda c: (str(c.get("parent_id") or ""), int(c.get("position", 0))))
+    return categories + non_categories
 
 
 def read_tokens_file() -> List[str]:
@@ -438,6 +520,83 @@ def show_bot_info(token: str) -> None:
     wait_for_enter()
 
 
+def run_token_health_check(token: str) -> None:
+    clear_console(); print_banner(); print(); print_centered("Token Health Check", UiColor.LIGHT_GRAY); print()
+    checks: List[Tuple[str, bool, str]] = []
+    try:
+        me = api_get("/users/@me", token)
+        checks.append(("Token /users/@me", me.status_code == 200, f"HTTP {me.status_code}"))
+        guilds = api_get("/users/@me/guilds", token)
+        checks.append(("Lista serwerów", guilds.status_code == 200, f"HTTP {guilds.status_code}"))
+        app = api_get("/oauth2/applications/@me", token)
+        checks.append(("Dane aplikacji", app.status_code == 200, f"HTTP {app.status_code}"))
+
+        if guilds.status_code == 200 and guilds.json():
+            first_guild_id = guilds.json()[0].get("id")
+            if first_guild_id:
+                roles = api_get(f"/guilds/{first_guild_id}/roles", token)
+                checks.append(("Pobranie ról", roles.status_code == 200, f"HTTP {roles.status_code}"))
+                channels = api_get(f"/guilds/{first_guild_id}/channels", token)
+                checks.append(("Pobranie kanałów", channels.status_code == 200, f"HTTP {channels.status_code}"))
+    except requests.RequestException as exc:
+        checks.append(("Błąd sieci", False, str(exc)))
+
+    lines: List[str] = []
+    for name, ok, detail in checks:
+        state = color_text("OK", UiColor.GREEN) if ok else color_text("BŁĄD", UiColor.RED)
+        lines.append(f"{name}: {state} ({detail})")
+    draw_centered_box(lines if lines else ["Brak danych health check."])
+    wait_for_enter()
+
+
+def get_restore_plan_summary(backup: dict, include_messages: bool) -> List[str]:
+    roles_data = backup.get("roles", {}).get("data", []) if isinstance(backup.get("roles"), dict) else []
+    channels_data = backup.get("channels", {}).get("data", []) if isinstance(backup.get("channels"), dict) else []
+    emojis_data = backup.get("emojis", {}).get("data", []) if isinstance(backup.get("emojis"), dict) else []
+    stickers_data = backup.get("stickers", {}).get("data", []) if isinstance(backup.get("stickers"), dict) else []
+    events_data = backup.get("scheduled_events", {}).get("data", []) if isinstance(backup.get("scheduled_events"), dict) else []
+    messages_data = backup.get("messages", {}) if isinstance(backup.get("messages"), dict) else {}
+    messages_count = sum(len(v) for v in messages_data.values()) if include_messages else 0
+    return [
+        f"Plan restore dla: {backup.get('guild_name', '-')}",
+        f"Role: {len(roles_data)}",
+        f"Kanały: {len(channels_data)}",
+        f"Emotki: {len(emojis_data)}",
+        f"Stickery: {len(stickers_data)}",
+        f"Eventy: {len(events_data)}",
+        f"Wiadomości: {messages_count if include_messages else 0}",
+    ]
+
+
+def apply_guild_settings_from_backup(token: str, target_guild_id: str, backup: dict) -> Tuple[bool, str]:
+    guild_payload = backup.get("guild", {}).get("data", {}) if isinstance(backup.get("guild"), dict) else {}
+    if not isinstance(guild_payload, dict) or not guild_payload:
+        return False, "Brak danych ustawień serwera w backupie."
+
+    patch_payload = {
+        "name": guild_payload.get("name"),
+        "verification_level": guild_payload.get("verification_level"),
+        "default_message_notifications": guild_payload.get("default_message_notifications"),
+        "explicit_content_filter": guild_payload.get("explicit_content_filter"),
+        "afk_timeout": guild_payload.get("afk_timeout"),
+        "system_channel_id": guild_payload.get("system_channel_id"),
+        "rules_channel_id": guild_payload.get("rules_channel_id"),
+        "public_updates_channel_id": guild_payload.get("public_updates_channel_id"),
+        "preferred_locale": guild_payload.get("preferred_locale"),
+    }
+    patch_payload = {k: v for k, v in patch_payload.items() if v is not None}
+    if not patch_payload:
+        return False, "Brak pól do zastosowania."
+
+    try:
+        response = api_patch(f"/guilds/{target_guild_id}", token, patch_payload)
+        if response.status_code in (200, 201):
+            return True, "Zastosowano ustawienia serwera z backupu."
+        return False, f"Nie udało się zastosować ustawień (HTTP {response.status_code})."
+    except requests.RequestException as exc:
+        return False, f"Błąd sieci ustawień serwera: {exc}"
+
+
 def parse_role_filter_selection(roles_data: List[dict]) -> Tuple[Optional[Set[str]], List[str]]:
     selectable = [r for r in roles_data if r.get("name") != "@everyone" and r.get("id")]
     if not selectable:
@@ -482,6 +641,28 @@ def configure_backup_settings(token: str) -> None:
     current.messages_per_channel = ask_number("Limit wiadomości na kanał", 1, 1000, current.messages_per_channel)
     current.copy_messages = ask_yes_no("Zapisywać wiadomości?", current.copy_messages)
 
+    scope_labels = ["guild", "roles", "channels", "emojis", "stickers", "scheduled_events", "messages"]
+    clear_console(); print_banner(); print(); print_centered("Zakres backupu", UiColor.LIGHT_GRAY); print()
+    draw_centered_box([
+        "Wszystkie zakresy są domyślnie WŁĄCZONE.",
+        "Wpisz numery zakresów, które chcesz WYŁĄCZYĆ (np. 2,5).",
+        "ENTER = nic nie wyłączaj.",
+        "[1] guild", "[2] roles", "[3] channels", "[4] emojis", "[5] stickers", "[6] scheduled_events", "[7] messages",
+    ])
+    disabled_scope_numbers = parse_disable_numbers(input(color_text("\n-> ", UiColor.CYAN)).strip(), scope_labels)
+    current.included_scopes = {name for idx, name in enumerate(scope_labels, 1) if idx not in disabled_scope_numbers}
+
+    cleanup_labels = ["channels", "roles", "emojis", "stickers", "events"]
+    clear_console(); print_banner(); print(); print_centered("Zakres czyszczenia serwera", UiColor.LIGHT_GRAY); print()
+    draw_centered_box([
+        "Przy opcji wipe_current wszystko jest domyślnie WŁĄCZONE.",
+        "Wpisz numery, które chcesz WYŁĄCZYĆ z czyszczenia.",
+        "ENTER = nic nie wyłączaj.",
+        "[1] channels", "[2] roles", "[3] emojis", "[4] stickers", "[5] events",
+    ])
+    disabled_cleanup_numbers = parse_disable_numbers(input(color_text("\n-> ", UiColor.CYAN)).strip(), cleanup_labels)
+    current.cleanup_scopes = {name for idx, name in enumerate(cleanup_labels, 1) if idx not in disabled_cleanup_numbers}
+
     roles = fetch_json_data(token, f"/guilds/{guild.guild_id}/roles")
     if roles.get("ok") and isinstance(roles.get("data"), list):
         role_ids, role_names = parse_role_filter_selection(roles["data"])
@@ -489,6 +670,7 @@ def configure_backup_settings(token: str) -> None:
         current.role_filter_names = role_names
 
     BACKUP_SETTINGS_BY_GUILD[guild.guild_id] = current
+    save_backup_settings_to_disk()
 
     clear_console(); print_banner(); print(); print_centered("Backup settings zapisane", UiColor.GREEN); print()
     draw_centered_box([
@@ -496,6 +678,8 @@ def configure_backup_settings(token: str) -> None:
         f"Limit wiadomości/kanał: {current.messages_per_channel}",
         f"Zapis wiadomości: {'Tak' if current.copy_messages else 'Nie'}",
         f"Filtr ról: {', '.join(current.role_filter_names) if current.role_filter_names else 'Wszystkie'}",
+        f"Zakres backupu: {', '.join(sorted(current.included_scopes))}",
+        f"Zakres czyszczenia: {', '.join(sorted(current.cleanup_scopes))}",
     ])
     wait_for_enter()
 
@@ -535,7 +719,7 @@ def backup_full_server_data(token: str) -> None:
         wait_for_enter(); return
 
     settings = BACKUP_SETTINGS_BY_GUILD.get(guild.guild_id, BackupSettings())
-    copy_messages = settings.copy_messages
+    copy_messages = settings.copy_messages and "messages" in settings.included_scopes
     messages_limit = settings.messages_per_channel
 
     def fetch(path: str, params: Optional[dict] = None) -> Dict[str, object]:
@@ -543,19 +727,25 @@ def backup_full_server_data(token: str) -> None:
             response = api_get(path, token, params=params)
             if response.status_code == 200:
                 return {"ok": True, "status": 200, "data": response.json()}
+            log_event("backup", f"HTTP {response.status_code} {path}")
             return {"ok": False, "status": response.status_code, "error": response.text}
         except requests.RequestException as exc:
+            log_event("backup", f"network_error {path}: {exc}")
             return {"ok": False, "status": None, "error": str(exc)}
 
     try:
-        guild_info = fetch(f"/guilds/{guild.guild_id}")
-        roles = fetch(f"/guilds/{guild.guild_id}/roles")
-        channels = fetch(f"/guilds/{guild.guild_id}/channels")
-        emojis = fetch(f"/guilds/{guild.guild_id}/emojis")
-        stickers = fetch(f"/guilds/{guild.guild_id}/stickers")
-        scheduled_events = fetch(f"/guilds/{guild.guild_id}/scheduled-events")
+        guild_info = fetch(f"/guilds/{guild.guild_id}") if "guild" in settings.included_scopes else {"ok": False, "data": {}}
+        roles = fetch(f"/guilds/{guild.guild_id}/roles") if "roles" in settings.included_scopes else {"ok": False, "data": []}
+        channels = fetch(f"/guilds/{guild.guild_id}/channels") if "channels" in settings.included_scopes else {"ok": False, "data": []}
+        emojis = fetch(f"/guilds/{guild.guild_id}/emojis") if "emojis" in settings.included_scopes else {"ok": False, "data": []}
+        stickers = fetch(f"/guilds/{guild.guild_id}/stickers") if "stickers" in settings.included_scopes else {"ok": False, "data": []}
+        scheduled_events = fetch(f"/guilds/{guild.guild_id}/scheduled-events") if "scheduled_events" in settings.included_scopes else {"ok": False, "data": []}
+
+        if channels.get("ok") and isinstance(channels.get("data"), list):
+            channels["data"] = sort_channels_in_backup_order(channels["data"])
 
         messages_by_channel: Dict[str, List[dict]] = {}
+        message_channel_order: List[str] = []
         if copy_messages and channels.get("ok"):
             text_channels = [ch for ch in channels["data"] if ch.get("type") == 0 and ch.get("id")]
             for idx, ch in enumerate(text_channels, 1):
@@ -570,16 +760,19 @@ def backup_full_server_data(token: str) -> None:
                         "id": msg.get("id"),
                         "content": msg.get("content", ""),
                         "author_name": author.get("username", "Unknown"),
+                        "author_global_name": author.get("global_name") or "",
                         "author_avatar": author.get("avatar"),
                         "author_id": author.get("id"),
                         "embeds": msg.get("embeds", []),
                         "attachments": msg.get("attachments", []),
                     })
-                messages_by_channel[ch["id"]] = list(reversed(saved))
+                channel_id = str(ch["id"])
+                messages_by_channel[channel_id] = list(reversed(saved))
+                message_channel_order.append(channel_id)
             clear_inline_status()
 
         owner_id = guild_info.get("data", {}).get("owner_id") if guild_info.get("ok") else None
-        os.makedirs(BACKUPS_DIR, exist_ok=True)
+        ensure_runtime_dirs()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join(BACKUPS_DIR, f"full_backup_{guild.guild_id}_{timestamp}.json")
 
@@ -601,6 +794,7 @@ def backup_full_server_data(token: str) -> None:
             "messages_saved": copy_messages,
             "messages_limit_per_channel": messages_limit,
             "selected_role_names": role_names,
+            "selected_scopes": sorted(list(settings.included_scopes)),
             "backup_scope": ["guild", "roles", "channels", "emojis", "stickers", "scheduled_events", "messages_optional"],
             "guild": guild_info,
             "roles": roles_payload,
@@ -609,11 +803,14 @@ def backup_full_server_data(token: str) -> None:
             "stickers": stickers,
             "scheduled_events": scheduled_events,
             "messages": messages_by_channel,
+            "messages_channel_order": message_channel_order,
         }
         with open(backup_path, "w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
+        log_event("backup", f"saved {backup_path}")
         print_centered(f"Sukces: zapisano backup do {backup_path}", UiColor.GREEN)
     except Exception as exc:
+        log_event("backup", f"exception: {exc}")
         print_centered(f"Błąd podczas zapisywania backupu: {exc}", UiColor.RED)
     wait_for_enter()
 
@@ -642,6 +839,7 @@ def show_backup_info() -> None:
             f"Liczba emotek: {emojis_count}",
             f"Limit wiadomości/kanał: {data.get('messages_limit_per_channel', 100)}",
             f"Filtr ról: {', '.join(role_filter) if isinstance(role_filter, list) and role_filter else 'Wszystkie'}",
+            f"Zakres: {', '.join(data.get('selected_scopes', [])) if isinstance(data.get('selected_scopes'), list) else 'pełny'}",
             f"Zapisane wiadomości: {messages_count}",
         ]
         draw_centered_box(info_lines)
@@ -652,83 +850,74 @@ def show_backup_info() -> None:
 
 
 
-def wipe_current_guild_state(token: str, guild_id: str) -> Dict[str, int]:
+def wipe_current_guild_state(token: str, guild_id: str, scopes: Set[str], fast_mode: bool) -> Dict[str, int]:
     deleted = {"channels": 0, "roles": 0, "emojis": 0, "stickers": 0, "events": 0}
 
-    try:
-        channels_res = api_get(f"/guilds/{guild_id}/channels", token)
-        if channels_res.status_code == 200:
-            channels = channels_res.json()
-            for idx, channel in enumerate(channels, 1):
-                channel_id = channel.get("id")
-                if not channel_id:
-                    continue
-                api_delete(f"/channels/{channel_id}", token)
-                deleted["channels"] += 1
-                print_inline_status(f"Czyszczenie kanałów: {idx}/{len(channels)}")
+    def delete_many(label: str, paths: List[str]) -> int:
+        count = 0
+        if not paths:
+            return count
+        if fast_mode:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                future_map = {executor.submit(api_delete, path, token): idx for idx, path in enumerate(paths, 1)}
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    try:
+                        future.result()
+                        count += 1
+                    except Exception as exc:
+                        log_event("cleanup", f"delete_error {label}: {exc}")
+                    print_inline_status(f"Czyszczenie {label}: {idx}/{len(paths)}")
             clear_inline_status()
-    except requests.RequestException:
+            return count
+
+        for idx, path in enumerate(paths, 1):
+            try:
+                api_delete(path, token)
+                count += 1
+            except Exception as exc:
+                log_event("cleanup", f"delete_error {label}: {exc}")
+            print_inline_status(f"Czyszczenie {label}: {idx}/{len(paths)}")
         clear_inline_status()
+        return count
 
     try:
-        events_res = api_get(f"/guilds/{guild_id}/scheduled-events", token)
-        if events_res.status_code == 200:
-            events = events_res.json()
-            for idx, event in enumerate(events, 1):
-                event_id = event.get("id")
-                if not event_id:
-                    continue
-                api_delete(f"/guilds/{guild_id}/scheduled-events/{event_id}", token)
-                deleted["events"] += 1
-                print_inline_status(f"Czyszczenie eventów: {idx}/{len(events)}")
-            clear_inline_status()
-    except requests.RequestException:
-        clear_inline_status()
+        if "channels" in scopes:
+            channels_res = api_get(f"/guilds/{guild_id}/channels", token)
+            if channels_res.status_code == 200:
+                paths = [f"/channels/{c.get('id')}" for c in channels_res.json() if c.get("id")]
+                deleted["channels"] = delete_many("kanałów", paths)
 
-    try:
-        emojis_res = api_get(f"/guilds/{guild_id}/emojis", token)
-        if emojis_res.status_code == 200:
-            emojis = emojis_res.json()
-            for idx, emoji in enumerate(emojis, 1):
-                emoji_id = emoji.get("id")
-                if not emoji_id:
-                    continue
-                api_delete(f"/guilds/{guild_id}/emojis/{emoji_id}", token)
-                deleted["emojis"] += 1
-                print_inline_status(f"Czyszczenie emotek: {idx}/{len(emojis)}")
-            clear_inline_status()
-    except requests.RequestException:
-        clear_inline_status()
+        if "events" in scopes:
+            events_res = api_get(f"/guilds/{guild_id}/scheduled-events", token)
+            if events_res.status_code == 200:
+                paths = [f"/guilds/{guild_id}/scheduled-events/{e.get('id')}" for e in events_res.json() if e.get("id")]
+                deleted["events"] = delete_many("eventów", paths)
 
-    try:
-        stickers_res = api_get(f"/guilds/{guild_id}/stickers", token)
-        if stickers_res.status_code == 200:
-            stickers = stickers_res.json()
-            for idx, sticker in enumerate(stickers, 1):
-                sticker_id = sticker.get("id")
-                if not sticker_id:
-                    continue
-                api_delete(f"/guilds/{guild_id}/stickers/{sticker_id}", token)
-                deleted["stickers"] += 1
-                print_inline_status(f"Czyszczenie stickerów: {idx}/{len(stickers)}")
-            clear_inline_status()
-    except requests.RequestException:
-        clear_inline_status()
+        if "emojis" in scopes:
+            emojis_res = api_get(f"/guilds/{guild_id}/emojis", token)
+            if emojis_res.status_code == 200:
+                paths = [f"/guilds/{guild_id}/emojis/{e.get('id')}" for e in emojis_res.json() if e.get("id")]
+                deleted["emojis"] = delete_many("emotek", paths)
 
-    try:
-        roles_res = api_get(f"/guilds/{guild_id}/roles", token)
-        if roles_res.status_code == 200:
-            roles = [r for r in roles_res.json() if r.get("name") != "@everyone" and not r.get("managed", False) and r.get("id")]
-            roles.sort(key=lambda r: int(r.get("position", 0)))
-            for idx, role in enumerate(roles, 1):
-                api_delete(f"/guilds/{guild_id}/roles/{role.get('id')}", token)
-                deleted["roles"] += 1
-                print_inline_status(f"Czyszczenie ról: {idx}/{len(roles)}")
-            clear_inline_status()
-    except requests.RequestException:
-        clear_inline_status()
+        if "stickers" in scopes:
+            stickers_res = api_get(f"/guilds/{guild_id}/stickers", token)
+            if stickers_res.status_code == 200:
+                paths = [f"/guilds/{guild_id}/stickers/{s.get('id')}" for s in stickers_res.json() if s.get("id")]
+                deleted["stickers"] = delete_many("stickerów", paths)
+
+        if "roles" in scopes:
+            roles_res = api_get(f"/guilds/{guild_id}/roles", token)
+            if roles_res.status_code == 200:
+                roles = [r for r in roles_res.json() if r.get("name") != "@everyone" and not r.get("managed", False) and r.get("id")]
+                roles.sort(key=lambda r: int(r.get("position", 0)))
+                paths = [f"/guilds/{guild_id}/roles/{r.get('id')}" for r in roles]
+                deleted["roles"] = delete_many("ról", paths)
+    except requests.RequestException as exc:
+        log_event("cleanup", f"network_error: {exc}")
 
     return deleted
+
 
 def restore_backup_to_other_guild(token: str) -> None:
     backup_path = choose_backup_file()
@@ -739,22 +928,43 @@ def restore_backup_to_other_guild(token: str) -> None:
         wait_for_enter(); return
 
     wipe_current = ask_yes_no("Usunąć aktualny stan serwera przed odtworzeniem?", default=False)
+    fast_cleanup = ask_yes_no("Tryb szybkiego czyszczenia (równoległy)?", default=True)
     copy_messages = ask_yes_no("Przywrócić także zapisane wiadomości przez webhooki?", default=False)
 
     try:
         with open(backup_path, 'r', encoding='utf-8') as f:
             backup = json.load(f)
 
+        summary_lines = get_restore_plan_summary(backup, copy_messages)
+        clear_console(); print_banner(); print(); print_centered("Dry Run - Podgląd planu", UiColor.LIGHT_GRAY); print()
+        draw_centered_box(summary_lines)
+        if ask_yes_no("Pokaż szczegółowy dry-run?", default=False):
+            details = [
+                f"Role: {', '.join([r.get('name','?') for r in backup.get('roles',{}).get('data',[])[:20]]) or '-'}",
+                f"Kanały: {', '.join([c.get('name','?') for c in backup.get('channels',{}).get('data',[])[:20]]) or '-'}",
+            ]
+            draw_centered_box(details)
+        if not ask_yes_no("Kontynuować odtwarzanie?", default=True):
+            print_centered("Przerwano odtwarzanie.", UiColor.YELLOW)
+            wait_for_enter(); return
+
         roles_data = backup.get("roles", {}).get("data", []) if isinstance(backup.get("roles"), dict) else []
         channels_data = backup.get("channels", {}).get("data", []) if isinstance(backup.get("channels"), dict) else []
         messages_data = backup.get("messages", {}) if isinstance(backup.get("messages"), dict) else {}
+        messages_order = backup.get("messages_channel_order", []) if isinstance(backup.get("messages_channel_order"), list) else []
 
+        settings = BACKUP_SETTINGS_BY_GUILD.get(target.guild_id, BackupSettings())
         if wipe_current:
-            deleted = wipe_current_guild_state(token, target.guild_id)
+            deleted = wipe_current_guild_state(token, target.guild_id, settings.cleanup_scopes, fast_cleanup)
+            log_event("restore", f"wipe target={target.guild_id} deleted={deleted}")
             print_centered(
                 f"Wyczyszczono serwer. Kanały: {deleted['channels']}, Role: {deleted['roles']}, Emotki: {deleted['emojis']}, Stickery: {deleted['stickers']}, Eventy: {deleted['events']}",
                 UiColor.YELLOW,
             )
+
+        applied, msg = apply_guild_settings_from_backup(token, target.guild_id, backup)
+        print_centered(msg, UiColor.GREEN if applied else UiColor.YELLOW)
+        log_event("restore", f"guild_settings applied={applied} msg={msg}")
 
         created_roles = 0
         created_channels = 0
@@ -777,48 +987,90 @@ def restore_backup_to_other_guild(token: str) -> None:
                 if new_id:
                     role_map[str(role.get("id"))] = new_id
                     created_roles += 1
+            else:
+                log_event("restore", f"create_role_failed {role.get('name')} HTTP {res.status_code}")
             print_inline_status(f"Status ról: {idx}/{len(manageable_roles)}")
-
         clear_inline_status()
 
-        category_channels = [c for c in channels_data if c.get("type") == 4]
-        normal_channels = [c for c in channels_data if c.get("type") != 4]
+        ordered_channels = sort_channels_in_backup_order(channels_data)
 
-        for idx, channel in enumerate(category_channels + normal_channels, 1):
-            payload = {
-                "name": channel.get("name", "restored-channel"),
-                "type": channel.get("type", 0),
-                "topic": channel.get("topic"),
-                "nsfw": bool(channel.get("nsfw", False)),
-                "rate_limit_per_user": int(channel.get("rate_limit_per_user", 0) or 0),
-            }
-            parent_id = channel.get("parent_id")
-            if parent_id and str(parent_id) in channel_map:
-                payload["parent_id"] = channel_map[str(parent_id)]
+        pending_channels = ordered_channels[:]
+        safety_passes = 0
+        while pending_channels and safety_passes < 5:
+            safety_passes += 1
+            next_pending = []
+            for idx, channel in enumerate(pending_channels, 1):
+                parent_id = channel.get("parent_id")
+                if parent_id and str(parent_id) not in channel_map:
+                    next_pending.append(channel)
+                    continue
 
-            res = api_post(f"/guilds/{target.guild_id}/channels", token, payload)
-            if res.status_code in (200, 201):
-                new_id = res.json().get("id")
-                if new_id:
-                    channel_map[str(channel.get("id"))] = new_id
-                    created_channels += 1
-            print_inline_status(f"Status kanałów: {idx}/{len(channels_data)}")
+                payload = {
+                    "name": channel.get("name", "restored-channel"),
+                    "type": channel.get("type", 0),
+                    "topic": channel.get("topic"),
+                    "nsfw": bool(channel.get("nsfw", False)),
+                    "rate_limit_per_user": int(channel.get("rate_limit_per_user", 0) or 0),
+                    "position": int(channel.get("position", 0) or 0),
+                }
+                overwrites = channel.get("permission_overwrites")
+                if isinstance(overwrites, list):
+                    mapped_overwrites = []
+                    for ow in overwrites:
+                        target_id = str(ow.get("id")) if ow.get("id") else None
+                        ow_type = int(ow.get("type", 0))
+                        if ow_type == 0 and target_id in role_map:
+                            target_id = role_map[target_id]
+                        if not target_id:
+                            continue
+                        mapped_overwrites.append({
+                            "id": target_id,
+                            "type": ow_type,
+                            "allow": ow.get("allow", "0"),
+                            "deny": ow.get("deny", "0"),
+                        })
+                    payload["permission_overwrites"] = mapped_overwrites
 
+                if parent_id and str(parent_id) in channel_map:
+                    payload["parent_id"] = channel_map[str(parent_id)]
+
+                res = api_post(f"/guilds/{target.guild_id}/channels", token, payload)
+                if res.status_code in (200, 201):
+                    new_id = res.json().get("id")
+                    if new_id:
+                        channel_map[str(channel.get("id"))] = new_id
+                        created_channels += 1
+                else:
+                    log_event("restore", f"create_channel_failed {channel.get('name')} HTTP {res.status_code}")
+                print_inline_status(f"Status kanałów: {created_channels}/{len(ordered_channels)}")
+            if len(next_pending) == len(pending_channels):
+                break
+            pending_channels = next_pending
         clear_inline_status()
 
         restored_messages = 0
         if copy_messages and messages_data:
-            for old_channel_id, messages in messages_data.items():
+            ordered_message_channels = [cid for cid in messages_order if cid in messages_data]
+            for cid in messages_data.keys():
+                if cid not in ordered_message_channels:
+                    ordered_message_channels.append(cid)
+
+            for old_channel_id in ordered_message_channels:
+                messages = messages_data.get(old_channel_id)
                 new_channel_id = channel_map.get(str(old_channel_id))
                 if not new_channel_id or not isinstance(messages, list):
                     continue
                 wh_res = api_post(f"/channels/{new_channel_id}/webhooks", token, {"name": "Backup Restore"})
                 if wh_res.status_code not in (200, 201):
+                    log_event("restore", f"webhook_create_failed channel={new_channel_id} HTTP {wh_res.status_code}")
                     continue
                 webhook = wh_res.json()
                 webhook_url = f"https://discord.com/api/webhooks/{webhook.get('id')}/{webhook.get('token')}"
-                for msg in messages[:100]:
-                    username = msg.get("author_name", "Unknown")
+
+                for msg in messages:
+                    username_base = msg.get("author_name", "Unknown")
+                    pseudo = msg.get("author_global_name") or "-"
+                    username = f"{username_base} | {pseudo}"
                     avatar_hash = msg.get("author_avatar")
                     author_id = msg.get("author_id")
                     avatar_url = f"https://cdn.discordapp.com/avatars/{author_id}/{avatar_hash}.png" if avatar_hash and author_id else None
@@ -838,17 +1090,43 @@ def restore_backup_to_other_guild(token: str) -> None:
                     try:
                         requests.post(webhook_url, json=payload, timeout=REQUEST_TIMEOUT)
                         restored_messages += 1
-                    except requests.RequestException:
+                    except requests.RequestException as exc:
+                        log_event("restore", f"webhook_send_failed: {exc}")
                         continue
                 try:
                     api_delete(f"/webhooks/{webhook.get('id')}/{webhook.get('token')}", token)
                 except Exception:
                     pass
 
+        log_event("restore", f"done target={target.guild_id} roles={created_roles} channels={created_channels} messages={restored_messages}")
         print_centered(f"Przywracanie zakończone. Role: {created_roles}, Kanały: {created_channels}, Wiadomości: {restored_messages}", UiColor.GREEN)
     except Exception as exc:
+        log_event("restore", f"exception: {exc}")
         print_centered(f"Błąd przywracania backupu: {exc}", UiColor.RED)
 
+    wait_for_enter()
+
+
+def run_server_cleanup(token: str) -> None:
+    clear_console(); print_banner(); print(); print_centered("Server Cleanup", UiColor.LIGHT_GRAY)
+    guild = choose_guild(token, "Wybierz serwer do wyczyszczenia")
+    if not guild:
+        wait_for_enter(); return
+    settings = BACKUP_SETTINGS_BY_GUILD.get(guild.guild_id, BackupSettings())
+    fast_mode = ask_yes_no("Tryb szybki czyszczenia?", default=True)
+    if not ask_yes_no("Na pewno czyścić serwer według cleanup scopes?", default=False):
+        print_centered("Anulowano czyszczenie.", UiColor.YELLOW)
+        wait_for_enter(); return
+
+    deleted = wipe_current_guild_state(token, guild.guild_id, settings.cleanup_scopes, fast_mode)
+    log_event("cleanup", f"manual target={guild.guild_id} deleted={deleted}")
+    draw_centered_box([
+        f"Kanały: {deleted['channels']}",
+        f"Role: {deleted['roles']}",
+        f"Emotki: {deleted['emojis']}",
+        f"Stickery: {deleted['stickers']}",
+        f"Eventy: {deleted['events']}",
+    ])
     wait_for_enter()
 
 
@@ -870,12 +1148,14 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
             "«04» Copy bot invite link",
             "«05» Give New Admin Role",
             "«06» Give Best Existing Role",
+            "«11» Token Health Check",
             "────────────────────────────────────────────────────────",
             centered_plain("[ Backup ]", width),
             "«07» Backup settings",
             "«08» Full backup (roles/channels/emojis/stickers/etc)",
             "«09» Restore backup to another server",
             "«10» Show backup information",
+            "«12» Server Cleanup",
         ]
         draw_centered_box(menu_lines)
 
@@ -902,11 +1182,17 @@ def token_actions_menu(selected_token: BotTokenStatus) -> None:
             restore_backup_to_other_guild(selected_token.token)
         elif choice in {"10", "010"}:
             show_backup_info()
+        elif choice in {"11", "011"}:
+            run_token_health_check(selected_token.token)
+        elif choice in {"12", "012"}:
+            run_server_cleanup(selected_token.token)
         else:
             print_centered("Niepoprawna opcja.", UiColor.RED); wait_for_enter()
 
 
 def main() -> None:
+    ensure_runtime_dirs()
+    load_backup_settings_from_disk()
     while True:
         clear_console()
         tokens = read_tokens_file()
